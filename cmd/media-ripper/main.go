@@ -1402,11 +1402,26 @@ func (m model) renderCDRipping() string {
 			Bold(true).
 			Margin(0, 2, 1, 2)
 		
+		var yearInfo string
+		if m.cdInfo.Year != "" {
+			yearInfo = fmt.Sprintf(" (%s)", m.cdInfo.Year)
+		}
+		
+		// Show metadata source info
+		var metadataSource string
+		if m.cdInfo.Artist != "Unknown Artist" || m.cdInfo.Album != "Unknown Album" {
+			metadataSource = fmt.Sprintf("\nMetadata: %s", m.config.CDRipping.CDDBMethod)
+		} else {
+			metadataSource = "\nMetadata: Basic disc info only"
+		}
+		
 		cdInfoDisplay = cdInfoStyle.Render(fmt.Sprintf(
-			"Artist: %s\nAlbum: %s\nTracks: %d",
+			"Artist: %s\nAlbum: %s%s\nTracks: %d%s",
 			m.cdInfo.Artist,
 			m.cdInfo.Album,
+			yearInfo,
 			m.cdInfo.TrackCount,
+			metadataSource,
 		))
 	}
 	
