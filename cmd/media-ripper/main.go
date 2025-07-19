@@ -75,8 +75,8 @@ type Screen int
 
 const (
 	WelcomeScreen Screen = iota
-	DriveSelectionScreen
 	SettingsMenuScreen
+	DrivesSettingsScreen
 	PathsSettingsScreen
 	CDRippingSettingsScreen
 	ToolsSettingsScreen
@@ -129,10 +129,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.currentScreen {
 		case WelcomeScreen:
 			return m.updateWelcome(msg)
-		case DriveSelectionScreen:
-			return m.updateDriveSelection(msg)
 		case SettingsMenuScreen:
 			return m.updateSettingsMenu(msg)
+		case DrivesSettingsScreen:
+			return m.updateDrivesSettings(msg)
 		case PathsSettingsScreen:
 			return m.updatePathsSettings(msg)
 		case CDRippingSettingsScreen:
@@ -527,10 +527,10 @@ func (m model) updatePathsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) updateDriveSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateDrivesSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
-		m.currentScreen = WelcomeScreen
+		m.currentScreen = SettingsMenuScreen
 		return m, nil
 	case "up", "k":
 		if m.selectedItem > 0 {
@@ -553,8 +553,8 @@ func (m model) updateDriveSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
 			
-			// Return to welcome screen
-			m.currentScreen = WelcomeScreen
+			// Return to settings menu
+			m.currentScreen = SettingsMenuScreen
 			return m, nil
 		}
 	case "r":
@@ -578,10 +578,6 @@ func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-	case "d":
-		m.currentScreen = DriveSelectionScreen
-		m.selectedItem = 0
-		return m, nil
 	case "s":
 		m.currentScreen = SettingsMenuScreen
 		m.selectedItem = 0
@@ -591,7 +587,7 @@ func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateSettingsMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	settingsOptions := []string{"Paths", "CD Ripping", "Tools", "UI Settings"}
+	settingsOptions := []string{"Drives", "Paths", "CD Ripping", "Tools", "UI Settings"}
 	
 	switch msg.String() {
 	case "q", "esc":
@@ -611,12 +607,14 @@ func (m model) updateSettingsMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Navigate to specific settings screen
 		switch m.selectedItem {
 		case 0:
-			m.currentScreen = PathsSettingsScreen
+			m.currentScreen = DrivesSettingsScreen
 		case 1:
-			m.currentScreen = CDRippingSettingsScreen
+			m.currentScreen = PathsSettingsScreen
 		case 2:
-			m.currentScreen = ToolsSettingsScreen
+			m.currentScreen = CDRippingSettingsScreen
 		case 3:
+			m.currentScreen = ToolsSettingsScreen
+		case 4:
 			m.currentScreen = UISettingsScreen
 		}
 		m.selectedItem = 0
@@ -638,10 +636,10 @@ func (m model) View() string {
 	switch m.currentScreen {
 	case WelcomeScreen:
 		return m.renderWelcome()
-	case DriveSelectionScreen:
-		return m.renderDriveSelection()
 	case SettingsMenuScreen:
 		return m.renderSettingsMenu()
+	case DrivesSettingsScreen:
+		return m.renderDrivesSettings()
 	case PathsSettingsScreen:
 		return m.renderPathsSettings()
 	case CDRippingSettingsScreen:
@@ -693,7 +691,7 @@ func (m model) renderWelcome() string {
 	configInfo := descriptionStyle.Render(fmt.Sprintf("Config: %s", configPath))
 
 	// Help section
-	help := helpStyle.Render("Press 'd' for Drive Selection, 's' for Settings, 'q' or Ctrl+C to quit")
+	help := helpStyle.Render("Press 's' for Settings, 'q' or Ctrl+C to quit")
 
 	// Combine all content
 	content := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",
@@ -1075,6 +1073,7 @@ func (m model) renderSettingsMenu() string {
 	subtitle := subtitleStyle.Render("Choose a category to configure")
 	
 	settingsOptions := []string{
+		"💿 Drives",
 		"📁 Paths",
 		"💿 CD Ripping", 
 		"🔧 Tools",
@@ -1113,9 +1112,9 @@ func (m model) renderSettingsMenu() string {
 	return containerStyle.Render(content)
 }
 
-func (m model) renderDriveSelection() string {
-	title := titleStyle.Render("💿 Drive Selection")
-	subtitle := subtitleStyle.Render("Choose an optical drive for ripping")
+func (m model) renderDrivesSettings() string {
+	title := titleStyle.Render("💿 Drives Settings")
+	subtitle := subtitleStyle.Render("Choose and configure optical drives")
 	
 	var content string
 	
