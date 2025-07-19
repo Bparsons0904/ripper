@@ -122,9 +122,315 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSettingsMenu(msg)
 		case PathsSettingsScreen:
 			return m.updatePathsSettings(msg)
+		case CDRippingSettingsScreen:
+			return m.updateCDRippingSettings(msg)
+		case ToolsSettingsScreen:
+			return m.updateToolsSettings(msg)
+		case UISettingsScreen:
+			return m.updateUISettings(msg)
 		// Add other screen handlers as needed
 		default:
 			return m.updateWelcome(msg)
+		}
+	}
+	return m, nil
+}
+
+func (m model) updateUISettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	uiFields := []string{"Theme", "Refresh Rate (ms)"}
+	
+	if m.isEditing {
+		// Handle editing mode
+		switch msg.String() {
+		case "enter":
+			// Save the edited value
+			switch m.selectedItem {
+			case 0: // Theme
+				if m.editValue != "" {
+					m.config.UI.Theme = m.editValue
+				}
+			case 1: // Refresh Rate
+				if val := parseInt(m.editValue); val >= 50 && val <= 1000 {
+					m.config.UI.RefreshRate = val
+				}
+			}
+			// Save config to file
+			if err := m.config.Save(config.GetConfigPath()); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		case "esc":
+			// Cancel editing
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		default:
+			// Handle text input
+			if msg.String() == "backspace" {
+				if len(m.editValue) > 0 {
+					m.editValue = m.editValue[:len(m.editValue)-1]
+				}
+			} else if len(msg.String()) == 1 {
+				// Add character to edit value
+				m.editValue += msg.String()
+			}
+			return m, nil
+		}
+	} else {
+		// Handle navigation mode
+		switch msg.String() {
+		case "q", "esc":
+			m.currentScreen = SettingsMenuScreen
+			return m, nil
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+			return m, nil
+		case "down", "j":
+			if m.selectedItem < len(uiFields)-1 {
+				m.selectedItem++
+			}
+			return m, nil
+		case "enter":
+			// Start editing the selected field
+			m.isEditing = true
+			// Set current value as edit value
+			switch m.selectedItem {
+			case 0:
+				m.editValue = m.config.UI.Theme
+			case 1:
+				m.editValue = fmt.Sprintf("%d", m.config.UI.RefreshRate)
+			}
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m model) updateCDRippingSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cdFields := []string{"Retry Count", "Retry Delay (sec)", "Initial Wait (sec)", "Auto Eject", "Output Format", "CDDB Method"}
+	
+	if m.isEditing {
+		// Handle editing mode
+		switch msg.String() {
+		case "enter":
+			// Save the edited value
+			switch m.selectedItem {
+			case 0: // Retry Count
+				if val := parseInt(m.editValue); val >= 0 && val <= 10 {
+					m.config.CDRipping.RetryCount = val
+				}
+			case 1: // Retry Delay
+				if val := parseInt(m.editValue); val >= 0 && val <= 60 {
+					m.config.CDRipping.RetryDelay = val
+				}
+			case 2: // Initial Wait
+				if val := parseInt(m.editValue); val >= 0 && val <= 120 {
+					m.config.CDRipping.InitialWait = val
+				}
+			case 4: // Output Format
+				validFormats := []string{"flac", "mp3", "ogg", "wav"}
+				for _, format := range validFormats {
+					if m.editValue == format {
+						m.config.CDRipping.OutputFormat = format
+						break
+					}
+				}
+			case 5: // CDDB Method
+				validMethods := []string{"musicbrainz", "cddb", "none"}
+				for _, method := range validMethods {
+					if m.editValue == method {
+						m.config.CDRipping.CDDBMethod = method
+						break
+					}
+				}
+			}
+			// Save config to file
+			if err := m.config.Save(config.GetConfigPath()); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		case "esc":
+			// Cancel editing
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		default:
+			// Handle text input for editable fields
+			if m.selectedItem != 3 { // Skip auto eject (it's toggled, not typed)
+				if msg.String() == "backspace" {
+					if len(m.editValue) > 0 {
+						m.editValue = m.editValue[:len(m.editValue)-1]
+					}
+				} else if len(msg.String()) == 1 {
+					// Add character to edit value
+					m.editValue += msg.String()
+				}
+			}
+			return m, nil
+		}
+	} else {
+		// Handle navigation mode
+		switch msg.String() {
+		case "q", "esc":
+			m.currentScreen = SettingsMenuScreen
+			return m, nil
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+			return m, nil
+		case "down", "j":
+			if m.selectedItem < len(cdFields)-1 {
+				m.selectedItem++
+			}
+			return m, nil
+		case "enter", " ":
+			if m.selectedItem == 3 { // Auto Eject - toggle boolean
+				m.config.CDRipping.AutoEject = !m.config.CDRipping.AutoEject
+				// Save config immediately for toggles
+				if err := m.config.Save(config.GetConfigPath()); err != nil {
+					fmt.Printf("Error saving config: %v\n", err)
+				}
+				return m, nil
+			} else if m.selectedItem == 4 { // Output Format - cycle through options
+				formats := []string{"flac", "mp3", "ogg", "wav"}
+				currentIndex := -1
+				for i, format := range formats {
+					if m.config.CDRipping.OutputFormat == format {
+						currentIndex = i
+						break
+					}
+				}
+				nextIndex := (currentIndex + 1) % len(formats)
+				m.config.CDRipping.OutputFormat = formats[nextIndex]
+				// Save config immediately
+				if err := m.config.Save(config.GetConfigPath()); err != nil {
+					fmt.Printf("Error saving config: %v\n", err)
+				}
+				return m, nil
+			} else if m.selectedItem == 5 { // CDDB Method - cycle through options
+				methods := []string{"musicbrainz", "cddb", "none"}
+				currentIndex := -1
+				for i, method := range methods {
+					if m.config.CDRipping.CDDBMethod == method {
+						currentIndex = i
+						break
+					}
+				}
+				nextIndex := (currentIndex + 1) % len(methods)
+				m.config.CDRipping.CDDBMethod = methods[nextIndex]
+				// Save config immediately
+				if err := m.config.Save(config.GetConfigPath()); err != nil {
+					fmt.Printf("Error saving config: %v\n", err)
+				}
+				return m, nil
+			} else {
+				// Start editing the selected field (numeric fields only)
+				m.isEditing = true
+				// Set current value as edit value
+				switch m.selectedItem {
+				case 0:
+					m.editValue = fmt.Sprintf("%d", m.config.CDRipping.RetryCount)
+				case 1:
+					m.editValue = fmt.Sprintf("%d", m.config.CDRipping.RetryDelay)
+				case 2:
+					m.editValue = fmt.Sprintf("%d", m.config.CDRipping.InitialWait)
+				}
+				return m, nil
+			}
+		}
+	}
+	return m, nil
+}
+
+// Helper function to parse integers safely
+func parseInt(s string) int {
+	val := 0
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			val = val*10 + int(r-'0')
+		} else {
+			return -1 // Invalid input
+		}
+	}
+	return val
+}
+
+func (m model) updateToolsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	toolsFields := []string{"ABCDE Path", "cd-discid Path", "MakeMKV Path"}
+	
+	if m.isEditing {
+		// Handle editing mode
+		switch msg.String() {
+		case "enter":
+			// Save the edited value
+			switch m.selectedItem {
+			case 0:
+				m.config.Tools.AbcdePath = m.editValue
+			case 1:
+				m.config.Tools.CDDiscidPath = m.editValue
+			case 2:
+				m.config.Tools.MakeMKVPath = m.editValue
+			}
+			// Save config to file
+			if err := m.config.Save(config.GetConfigPath()); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		case "esc":
+			// Cancel editing
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		default:
+			// Handle text input
+			if msg.String() == "backspace" {
+				if len(m.editValue) > 0 {
+					m.editValue = m.editValue[:len(m.editValue)-1]
+				}
+			} else if len(msg.String()) == 1 {
+				// Add character to edit value
+				m.editValue += msg.String()
+			}
+			return m, nil
+		}
+	} else {
+		// Handle navigation mode
+		switch msg.String() {
+		case "q", "esc":
+			m.currentScreen = SettingsMenuScreen
+			return m, nil
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+			return m, nil
+		case "down", "j":
+			if m.selectedItem < len(toolsFields)-1 {
+				m.selectedItem++
+			}
+			return m, nil
+		case "enter":
+			// Start editing the selected field
+			m.isEditing = true
+			// Set current value as edit value
+			switch m.selectedItem {
+			case 0:
+				m.editValue = m.config.Tools.AbcdePath
+			case 1:
+				m.editValue = m.config.Tools.CDDiscidPath
+			case 2:
+				m.editValue = m.config.Tools.MakeMKVPath
+			}
+			return m, nil
 		}
 	}
 	return m, nil
@@ -272,6 +578,12 @@ func (m model) View() string {
 		return m.renderSettingsMenu()
 	case PathsSettingsScreen:
 		return m.renderPathsSettings()
+	case CDRippingSettingsScreen:
+		return m.renderCDRippingSettings()
+	case ToolsSettingsScreen:
+		return m.renderToolsSettings()
+	case UISettingsScreen:
+		return m.renderUISettings()
 	default:
 		return m.renderWelcome()
 	}
@@ -334,6 +646,294 @@ func (m model) renderWelcome() string {
 	return containerStyle.Render(content)
 }
 
+func (m model) renderUISettings() string {
+	title := titleStyle.Render("🎨 UI Settings")
+	subtitle := subtitleStyle.Render("Configure user interface preferences")
+	
+	uiFields := []string{"Theme", "Refresh Rate (ms)"}
+	uiValues := []string{
+		m.config.UI.Theme,
+		fmt.Sprintf("%d", m.config.UI.RefreshRate),
+	}
+	
+	var fields string
+	for i, field := range uiFields {
+		value := uiValues[i]
+		
+		if m.isEditing && i == m.selectedItem {
+			// Show edit value with cursor
+			value = m.editValue + "█" // Block cursor
+		}
+		
+		if i == m.selectedItem {
+			// Highlighted field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(accent).
+				Bold(true).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(lightBlue).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1).
+				Margin(0, 2)
+			
+			if m.isEditing {
+				// Editing mode styling
+				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
+			}
+			
+			fields += fieldStyle.Render("▶ "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		} else {
+			// Regular field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(gray).
+				Margin(0, 2)
+			
+			fields += fieldStyle.Render("  "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		}
+	}
+	
+	// Add helpful hints
+	hintsStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Italic(true).
+		Margin(1, 2)
+	hints := hintsStyle.Render(
+		"Hints: Theme can be any string • Refresh Rate must be between 50-1000ms for smooth performance",
+	)
+	
+	var help string
+	if m.isEditing {
+		help = helpStyle.Render("Type to edit • Enter to save • Esc to cancel")
+	} else {
+		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter to edit • Esc/q to go back")
+	}
+	
+	content := fmt.Sprintf("%s\n%s\n\n%s%s\n%s",
+		title,
+		subtitle,
+		fields,
+		hints,
+		help,
+	)
+	
+	return containerStyle.Render(content)
+}
+
+func (m model) renderToolsSettings() string {
+	title := titleStyle.Render("🔧 Tools Settings")
+	subtitle := subtitleStyle.Render("Configure external tool paths (leave empty for auto-detection)")
+	
+	toolsFields := []string{"ABCDE Path", "cd-discid Path", "MakeMKV Path"}
+	toolsValues := []string{
+		m.config.Tools.AbcdePath,
+		m.config.Tools.CDDiscidPath,
+		m.config.Tools.MakeMKVPath,
+	}
+	
+	var fields string
+	for i, field := range toolsFields {
+		value := toolsValues[i]
+		if value == "" {
+			value = "(auto-detect)"
+		}
+		
+		if m.isEditing && i == m.selectedItem {
+			// Show edit value with cursor
+			value = m.editValue + "█" // Block cursor
+		}
+		
+		if i == m.selectedItem {
+			// Highlighted field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(accent).
+				Bold(true).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(lightBlue).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1).
+				Margin(0, 2)
+			
+			if m.isEditing {
+				// Editing mode styling
+				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
+			} else if toolsValues[i] == "" {
+				// Special styling for auto-detect
+				valueStyle = valueStyle.Foreground(gray).Italic(true)
+			}
+			
+			fields += fieldStyle.Render("▶ "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		} else {
+			// Regular field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(gray).
+				Margin(0, 2)
+			
+			if toolsValues[i] == "" {
+				// Special styling for auto-detect
+				valueStyle = valueStyle.Italic(true)
+			}
+			
+			fields += fieldStyle.Render("  "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		}
+	}
+	
+	// Add helpful hints
+	hintsStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Italic(true).
+		Margin(1, 2)
+	hints := hintsStyle.Render(
+		"Hints: Leave paths empty for automatic detection in PATH • Use absolute paths like /usr/bin/abcde",
+	)
+	
+	var help string
+	if m.isEditing {
+		help = helpStyle.Render("Type path or clear for auto-detect • Enter to save • Esc to cancel")
+	} else {
+		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter to edit • Esc/q to go back")
+	}
+	
+	content := fmt.Sprintf("%s\n%s\n\n%s%s\n%s",
+		title,
+		subtitle,
+		fields,
+		hints,
+		help,
+	)
+	
+	return containerStyle.Render(content)
+}
+
+func (m model) renderCDRippingSettings() string {
+	title := titleStyle.Render("💿 CD Ripping Settings")
+	subtitle := subtitleStyle.Render("Configure CD ripping behavior and formats")
+	
+	cdFields := []string{"Retry Count", "Retry Delay (sec)", "Initial Wait (sec)", "Auto Eject", "Output Format", "CDDB Method"}
+	cdValues := []string{
+		fmt.Sprintf("%d", m.config.CDRipping.RetryCount),
+		fmt.Sprintf("%d", m.config.CDRipping.RetryDelay),
+		fmt.Sprintf("%d", m.config.CDRipping.InitialWait),
+		fmt.Sprintf("%t", m.config.CDRipping.AutoEject),
+		m.config.CDRipping.OutputFormat,
+		m.config.CDRipping.CDDBMethod,
+	}
+	
+	var fields string
+	for i, field := range cdFields {
+		value := cdValues[i]
+		
+		// Special handling for boolean fields
+		if i == 3 { // Auto Eject
+			if m.config.CDRipping.AutoEject {
+				value = "✓ Yes" // Checkmark
+			} else {
+				value = "✗ No" // X mark
+			}
+		}
+		
+		// Special handling for editing mode
+		if m.isEditing && i == m.selectedItem && i != 3 && i != 4 && i != 5 {
+			// Show edit value with cursor (skip for boolean and selectable)
+			value = m.editValue + "█" // Block cursor
+		}
+		
+		// Add cycling indicators for selectable options
+		if i == 4 { // Output Format
+			formats := []string{"flac", "mp3", "ogg", "wav"}
+			for j, format := range formats {
+				if format == value {
+					value = fmt.Sprintf("%s (%d/%d)", value, j+1, len(formats))
+					break
+				}
+			}
+		} else if i == 5 { // CDDB Method
+			methods := []string{"musicbrainz", "cddb", "none"}
+			for j, method := range methods {
+				if method == value {
+					value = fmt.Sprintf("%s (%d/%d)", value, j+1, len(methods))
+					break
+				}
+			}
+		}
+		
+		if i == m.selectedItem {
+			// Highlighted field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(accent).
+				Bold(true).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(lightBlue).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1).
+				Margin(0, 2)
+			
+			if m.isEditing && i != 3 && i != 4 && i != 5 {
+				// Editing mode styling (skip for boolean and selectable)
+				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
+			} else if i == 3 {
+				// Special styling for boolean toggle
+				valueStyle = valueStyle.Background(green).Foreground(lipgloss.Color("0"))
+			} else if i == 4 || i == 5 {
+				// Special styling for selectable options
+				valueStyle = valueStyle.Background(lightBlue).Foreground(lipgloss.Color("0"))
+			}
+			
+			fields += fieldStyle.Render("▶ "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		} else {
+			// Regular field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(gray).
+				Margin(0, 2)
+			
+			fields += fieldStyle.Render("  "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		}
+	}
+	
+	// Add validation hints
+	hintsStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Italic(true).
+		Margin(1, 2)
+	hints := hintsStyle.Render(
+		"Hints: Retry Count (0-10) • Delays in seconds • Formats: flac, mp3, ogg, wav • CDDB: musicbrainz, cddb, none",
+	)
+	
+	var help string
+	if m.isEditing {
+		help = helpStyle.Render("Type to edit • Enter to save • Esc to cancel")
+	} else {
+		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter/Space to edit/toggle/cycle • Esc/q to go back")
+	}
+	
+	content := fmt.Sprintf("%s\n%s\n\n%s%s\n%s",
+		title,
+		subtitle,
+		fields,
+		hints,
+		help,
+	)
+	
+	return containerStyle.Render(content)
+}
+
 func (m model) renderPathsSettings() string {
 	title := titleStyle.Render("📁 Paths Settings")
 	subtitle := subtitleStyle.Render("Configure directory paths and log file location")
@@ -383,7 +983,7 @@ func (m model) renderPathsSettings() string {
 				Margin(0, 2)
 			
 			fields += fieldStyle.Render("  "+field+":") + "\n"
-			fields += valueStyle.Render("  "+value) + "\n\n"
+			fields += valueStyle.Render(value) + "\n\n"
 		}
 	}
 	
