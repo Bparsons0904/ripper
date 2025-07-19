@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/Bparsons0904/ripper/internal/config"
 	"github.com/Bparsons0904/ripper/internal/drives"
+	"github.com/Bparsons0904/ripper/internal/ripper"
 )
 
 var (
@@ -71,10 +72,19 @@ var (
 			Margin(1, 0, 0, 0)
 )
 
+// Message types for async operations
+type cdDetectedMsg struct {
+	cdInfo *ripper.CDInfo
+	err    error
+}
+
+type rippingProgressMsg ripper.ProgressInfo
+
 type Screen int
 
 const (
 	WelcomeScreen Screen = iota
+	CDRippingScreen
 	SettingsMenuScreen
 	DrivesSettingsScreen
 	PathsSettingsScreen
@@ -91,6 +101,11 @@ type model struct {
 	isEditing     bool
 	editValue     string
 	availableDrives []drives.DriveInfo
+	isRipping     bool
+	rippingProgress int
+	rippingStatus string
+	cdRipper      *ripper.CDRipper
+	cdInfo        *ripper.CDInfo
 }
 
 func initialModel() model {
@@ -108,6 +123,9 @@ func initialModel() model {
 		availableDrives = []drives.DriveInfo{}
 	}
 	
+	// Initialize CD ripper
+	cdRipper := ripper.NewCDRipper(cfg)
+
 	return model{
 		ready:           true,
 		config:          cfg,
@@ -116,6 +134,11 @@ func initialModel() model {
 		isEditing:       false,
 		editValue:       "",
 		availableDrives: availableDrives,
+		isRipping:       false,
+		rippingProgress: 0,
+		rippingStatus:   "",
+		cdRipper:        cdRipper,
+		cdInfo:          nil,
 	}
 }
 
@@ -123,12 +146,61 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
+// Commands for async operations
+func detectCDCmd(cdRipper *ripper.CDRipper) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		cdInfo, err := cdRipper.DetectCD()
+		return cdDetectedMsg{cdInfo: cdInfo, err: err}
+	})
+}
+
+func startRippingCmd(cdRipper *ripper.CDRipper, cdInfo *ripper.CDInfo) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		go func() {
+			cdRipper.RipCD(cdInfo)
+		}()
+		return nil
+	})
+}
+
+func listenForProgressCmd(progressCh <-chan ripper.ProgressInfo) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		progress := <-progressCh
+		return rippingProgressMsg(progress)
+	})
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case cdDetectedMsg:
+		if msg.err != nil {
+			m.rippingStatus = fmt.Sprintf("Error detecting CD: %v", msg.err)
+		} else {
+			m.cdInfo = msg.cdInfo
+			m.rippingStatus = "CD detected successfully"
+		}
+		return m, nil
+	case rippingProgressMsg:
+		progress := ripper.ProgressInfo(msg)
+		m.rippingProgress = progress.Progress
+		m.rippingStatus = progress.Status
+		if progress.Error != nil {
+			m.isRipping = false
+			m.rippingStatus = fmt.Sprintf("Error: %v", progress.Error)
+			return m, nil
+		}
+		if progress.Progress >= 100 {
+			m.isRipping = false
+			return m, nil
+		}
+		// Continue listening for progress
+		return m, listenForProgressCmd(m.cdRipper.GetProgressChannel())
 	case tea.KeyMsg:
 		switch m.currentScreen {
 		case WelcomeScreen:
 			return m.updateWelcome(msg)
+		case CDRippingScreen:
+			return m.updateCDRipping(msg)
 		case SettingsMenuScreen:
 			return m.updateSettingsMenu(msg)
 		case DrivesSettingsScreen:
@@ -578,6 +650,10 @@ func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "r":
+		m.currentScreen = CDRippingScreen
+		m.selectedItem = 0
+		return m, nil
 	case "s":
 		m.currentScreen = SettingsMenuScreen
 		m.selectedItem = 0
@@ -636,6 +712,8 @@ func (m model) View() string {
 	switch m.currentScreen {
 	case WelcomeScreen:
 		return m.renderWelcome()
+	case CDRippingScreen:
+		return m.renderCDRipping()
 	case SettingsMenuScreen:
 		return m.renderSettingsMenu()
 	case DrivesSettingsScreen:
@@ -691,7 +769,7 @@ func (m model) renderWelcome() string {
 	configInfo := descriptionStyle.Render(fmt.Sprintf("Config: %s", configPath))
 
 	// Help section
-	help := helpStyle.Render("Press 's' for Settings, 'q' or Ctrl+C to quit")
+	help := helpStyle.Render("Press 'r' to Rip CD, 's' for Settings, 'q' or Ctrl+C to quit")
 
 	// Combine all content
 	content := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",
@@ -1211,6 +1289,187 @@ func (m model) renderDrivesSettings() string {
 	
 	finalContent := fmt.Sprintf("%s\n%s", content, help)
 	return containerStyle.Render(finalContent)
+}
+
+func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.isRipping {
+		// During ripping, only allow quit
+		switch msg.String() {
+		case "q", "esc":
+			// Stop ripping process
+			m.cdRipper.Stop()
+			m.isRipping = false
+			m.rippingProgress = 0
+			m.rippingStatus = "Ripping cancelled"
+			m.currentScreen = WelcomeScreen
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Not ripping - normal navigation
+	switch msg.String() {
+	case "q", "esc":
+		m.currentScreen = WelcomeScreen
+		return m, nil
+	case "enter", " ":
+		// Start ripping
+		if m.config.Drives.CDDrive != "" && m.cdInfo != nil {
+			m.isRipping = true
+			m.rippingProgress = 0
+			m.rippingStatus = "Starting CD rip..."
+			// Start the ripping process and listen for progress
+			cmds := []tea.Cmd{
+				startRippingCmd(m.cdRipper, m.cdInfo),
+				listenForProgressCmd(m.cdRipper.GetProgressChannel()),
+			}
+			return m, tea.Batch(cmds...)
+		}
+	case "r":
+		// Refresh CD info
+		m.rippingStatus = "Detecting CD..."
+		return m, detectCDCmd(m.cdRipper)
+	}
+	return m, nil
+}
+
+func (m model) renderCDRipping() string {
+	title := titleStyle.Render("💿 CD Ripping")
+	
+	if m.isRipping {
+		// Show ripping progress
+		subtitle := subtitleStyle.Render("Ripping in progress...")
+		
+		// Progress bar (simple text-based for now)
+		progressStyle := lipgloss.NewStyle().
+			Foreground(green).
+			Bold(true).
+			Margin(1, 2)
+		
+		progressText := fmt.Sprintf("Progress: %d%%", m.rippingProgress)
+		progress := progressStyle.Render(progressText)
+		
+		statusDisplay := descriptionStyle.Render(m.rippingStatus)
+		
+		help := helpStyle.Render("Press 'q' or Esc to cancel ripping")
+		
+		content := fmt.Sprintf("%s\n%s\n\n%s\n%s\n\n%s",
+			title,
+			subtitle,
+			progress,
+			statusDisplay,
+			help,
+		)
+		
+		return containerStyle.Render(content)
+	}
+	
+	// Show CD info and ripping options
+	subtitle := subtitleStyle.Render("Insert a CD and start ripping")
+	
+	// Current drive info
+	currentDriveStyle := lipgloss.NewStyle().
+		Foreground(lightBlue).
+		Bold(true).
+		Margin(1, 2)
+	
+	driveInfo := currentDriveStyle.Render(
+		fmt.Sprintf("Drive: %s", m.config.Drives.CDDrive),
+	)
+	
+	// CD detection status and info
+	cdStatusStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Margin(0, 2, 1, 2)
+	
+	var cdStatus string
+	var cdInfoDisplay string
+	
+	if m.config.Drives.CDDrive == "" {
+		cdStatus = "❌ No drive configured - go to Settings > Drives"
+	} else if m.cdInfo == nil {
+		if m.rippingStatus == "" {
+			cdStatus = "🔍 Press 'r' to detect CD"
+		} else {
+			cdStatus = m.rippingStatus
+		}
+	} else {
+		cdStatus = "✅ CD detected"
+		
+		// Show CD information
+		cdInfoStyle := lipgloss.NewStyle().
+			Foreground(lightBlue).
+			Bold(true).
+			Margin(0, 2, 1, 2)
+		
+		cdInfoDisplay = cdInfoStyle.Render(fmt.Sprintf(
+			"Artist: %s\nAlbum: %s\nTracks: %d",
+			m.cdInfo.Artist,
+			m.cdInfo.Album,
+			m.cdInfo.TrackCount,
+		))
+	}
+	
+	cdStatusDisplay := cdStatusStyle.Render(cdStatus)
+	
+	// Ripping settings preview
+	settingsStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Margin(1, 2)
+	
+	settingsInfo := settingsStyle.Render(fmt.Sprintf(
+		"Format: %s • CDDB: %s • Output: %s",
+		m.config.CDRipping.OutputFormat,
+		m.config.CDRipping.CDDBMethod,
+		m.config.Paths.Music,
+	))
+	
+	// Action buttons (simulated)
+	actionStyle := lipgloss.NewStyle().
+		Foreground(accent).
+		Bold(true).
+		Background(lightBlue).
+		Padding(0, 1).
+		Margin(1, 2)
+	
+	var actionText string
+	if m.config.Drives.CDDrive == "" {
+		actionText = "Configure drive first"
+	} else if m.cdInfo == nil {
+		actionText = "Detect CD first (press 'r')"
+	} else {
+		actionText = "▶ Press Enter to start ripping"
+	}
+	
+	action := actionStyle.Render(actionText)
+	
+	help := helpStyle.Render("Press 'r' to detect CD • Enter to start • Esc/q to go back")
+	
+	var content string
+	if cdInfoDisplay != "" {
+		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s",
+			title,
+			subtitle,
+			driveInfo,
+			cdStatusDisplay,
+			cdInfoDisplay,
+			settingsInfo,
+			action,
+			help,
+		)
+	} else {
+		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n\n%s\n\n%s",
+			title,
+			subtitle,
+			driveInfo,
+			cdStatusDisplay,
+			settingsInfo,
+			action,
+			help,
+		)
+	}
+	
+	return containerStyle.Render(content)
 }
 
 func main() {
