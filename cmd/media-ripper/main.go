@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/Bparsons0904/ripper/internal/config"
+	"github.com/Bparsons0904/ripper/internal/drives"
 )
 
 var (
@@ -74,6 +75,7 @@ type Screen int
 
 const (
 	WelcomeScreen Screen = iota
+	DriveSelectionScreen
 	SettingsMenuScreen
 	PathsSettingsScreen
 	CDRippingSettingsScreen
@@ -88,6 +90,7 @@ type model struct {
 	selectedItem  int
 	isEditing     bool
 	editValue     string
+	availableDrives []drives.DriveInfo
 }
 
 func initialModel() model {
@@ -98,13 +101,21 @@ func initialModel() model {
 		cfg = config.DefaultConfig() // fallback to defaults
 	}
 	
+	// Detect available drives
+	availableDrives, err := drives.DetectDrives()
+	if err != nil {
+		fmt.Printf("Warning: Could not detect drives: %v\n", err)
+		availableDrives = []drives.DriveInfo{}
+	}
+	
 	return model{
-		ready:         true,
-		config:        cfg,
-		currentScreen: WelcomeScreen,
-		selectedItem:  0,
-		isEditing:     false,
-		editValue:     "",
+		ready:           true,
+		config:          cfg,
+		currentScreen:   WelcomeScreen,
+		selectedItem:    0,
+		isEditing:       false,
+		editValue:       "",
+		availableDrives: availableDrives,
 	}
 }
 
@@ -118,6 +129,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.currentScreen {
 		case WelcomeScreen:
 			return m.updateWelcome(msg)
+		case DriveSelectionScreen:
+			return m.updateDriveSelection(msg)
 		case SettingsMenuScreen:
 			return m.updateSettingsMenu(msg)
 		case PathsSettingsScreen:
@@ -514,10 +527,61 @@ func (m model) updatePathsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateDriveSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc":
+		m.currentScreen = WelcomeScreen
+		return m, nil
+	case "up", "k":
+		if m.selectedItem > 0 {
+			m.selectedItem--
+		}
+		return m, nil
+	case "down", "j":
+		if m.selectedItem < len(m.availableDrives)-1 {
+			m.selectedItem++
+		}
+		return m, nil
+	case "enter", " ":
+		if len(m.availableDrives) > 0 && m.selectedItem < len(m.availableDrives) {
+			// Update config with selected drive
+			selectedDrive := m.availableDrives[m.selectedItem]
+			m.config.Drives.CDDrive = selectedDrive.Device
+			
+			// Save config
+			if err := m.config.Save(config.GetConfigPath()); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
+			
+			// Return to welcome screen
+			m.currentScreen = WelcomeScreen
+			return m, nil
+		}
+	case "r":
+		// Refresh drive detection
+		availableDrives, err := drives.DetectDrives()
+		if err != nil {
+			fmt.Printf("Warning: Could not detect drives: %v\n", err)
+		} else {
+			m.availableDrives = availableDrives
+			// Reset selection if it's out of bounds
+			if m.selectedItem >= len(m.availableDrives) {
+				m.selectedItem = 0
+			}
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "d":
+		m.currentScreen = DriveSelectionScreen
+		m.selectedItem = 0
+		return m, nil
 	case "s":
 		m.currentScreen = SettingsMenuScreen
 		m.selectedItem = 0
@@ -574,6 +638,8 @@ func (m model) View() string {
 	switch m.currentScreen {
 	case WelcomeScreen:
 		return m.renderWelcome()
+	case DriveSelectionScreen:
+		return m.renderDriveSelection()
 	case SettingsMenuScreen:
 		return m.renderSettingsMenu()
 	case PathsSettingsScreen:
@@ -627,7 +693,7 @@ func (m model) renderWelcome() string {
 	configInfo := descriptionStyle.Render(fmt.Sprintf("Config: %s", configPath))
 
 	// Help section
-	help := helpStyle.Render("Press 's' for Settings, 'q' or Ctrl+C to quit")
+	help := helpStyle.Render("Press 'd' for Drive Selection, 's' for Settings, 'q' or Ctrl+C to quit")
 
 	// Combine all content
 	content := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",
@@ -1045,6 +1111,107 @@ func (m model) renderSettingsMenu() string {
 	)
 	
 	return containerStyle.Render(content)
+}
+
+func (m model) renderDriveSelection() string {
+	title := titleStyle.Render("💿 Drive Selection")
+	subtitle := subtitleStyle.Render("Choose an optical drive for ripping")
+	
+	var content string
+	
+	if len(m.availableDrives) == 0 {
+		noDrivesStyle := lipgloss.NewStyle().
+			Foreground(accent).
+			Bold(true).
+			Align(lipgloss.Center).
+			Margin(2, 0)
+		
+		noDriverMessage := noDrivesStyle.Render("No optical drives detected!")
+		
+		helpMessage := descriptionStyle.Render(
+			"This could mean:\n" +
+			"• No optical drives are connected\n" +
+			"• Drives are not properly mounted\n" +
+			"• You need elevated permissions to access drives\n\n" +
+			"Press 'r' to refresh detection",
+		)
+		
+		content = fmt.Sprintf("%s\n%s\n\n%s\n%s",
+			title,
+			subtitle,
+			noDriverMessage,
+			helpMessage,
+		)
+	} else {
+		// Show current selection
+		currentDriveStyle := lipgloss.NewStyle().
+			Foreground(green).
+			Bold(true).
+			Margin(0, 2, 1, 2)
+		
+		currentSelection := currentDriveStyle.Render(
+			fmt.Sprintf("Current: %s", m.config.Drives.CDDrive),
+		)
+		
+		// List available drives
+		var drivesList string
+		for i, drive := range m.availableDrives {
+			var driveInfo string
+			
+			// Format drive information
+			mediaInfo := ""
+			if drive.MediaType != "Unknown" {
+				mediaInfo = fmt.Sprintf(" (%s)", drive.MediaType)
+			}
+			
+			readOnlyInfo := ""
+			if drive.IsReadOnly {
+				readOnlyInfo = " [Read-Only]"
+			}
+			
+			driveInfo = fmt.Sprintf("%s - %s%s%s", 
+				drive.Device, 
+				drive.Model, 
+				mediaInfo,
+				readOnlyInfo,
+			)
+			
+			if i == m.selectedItem {
+				// Highlighted drive
+				selectedStyle := lipgloss.NewStyle().
+					Foreground(accent).
+					Bold(true).
+					Background(lightBlue).
+					Padding(0, 1).
+					Margin(0, 2)
+				drivesList += selectedStyle.Render("▶ "+driveInfo) + "\n"
+			} else {
+				// Regular drive
+				regularStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("255")).
+					Margin(0, 2)
+				drivesList += regularStyle.Render("  "+driveInfo) + "\n"
+			}
+		}
+		
+		content = fmt.Sprintf("%s\n%s\n\n%s\n\n%s",
+			title,
+			subtitle,
+			currentSelection,
+			drivesList,
+		)
+	}
+	
+	// Help section
+	var help string
+	if len(m.availableDrives) == 0 {
+		help = helpStyle.Render("Press 'r' to refresh • Esc/q to go back")
+	} else {
+		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter/Space to select • 'r' to refresh • Esc/q to go back")
+	}
+	
+	finalContent := fmt.Sprintf("%s\n%s", content, help)
+	return containerStyle.Render(finalContent)
 }
 
 func main() {
