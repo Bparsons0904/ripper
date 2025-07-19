@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/Bparsons0904/ripper/internal/config"
 )
 
 var (
@@ -69,13 +70,37 @@ var (
 			Margin(1, 0, 0, 0)
 )
 
+type Screen int
+
+const (
+	WelcomeScreen Screen = iota
+	SettingsMenuScreen
+	PathsSettingsScreen
+	CDRippingSettingsScreen
+	ToolsSettingsScreen
+	UISettingsScreen
+)
+
 type model struct {
-	ready bool
+	ready         bool
+	config        *config.Config
+	currentScreen Screen
+	selectedItem  int
 }
 
 func initialModel() model {
+	// Initialize configuration on startup
+	cfg, err := config.InitializeConfig()
+	if err != nil {
+		fmt.Printf("Error initializing config: %v\n", err)
+		cfg = config.DefaultConfig() // fallback to defaults
+	}
+	
 	return model{
-		ready: true,
+		ready:         true,
+		config:        cfg,
+		currentScreen: WelcomeScreen,
+		selectedItem:  0,
 	}
 }
 
@@ -86,10 +111,62 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
+		switch m.currentScreen {
+		case WelcomeScreen:
+			return m.updateWelcome(msg)
+		case SettingsMenuScreen:
+			return m.updateSettingsMenu(msg)
+		// Add other screen handlers as needed
+		default:
+			return m.updateWelcome(msg)
 		}
+	}
+	return m, nil
+}
+
+func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "s":
+		m.currentScreen = SettingsMenuScreen
+		m.selectedItem = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) updateSettingsMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	settingsOptions := []string{"Paths", "CD Ripping", "Tools", "UI Settings"}
+	
+	switch msg.String() {
+	case "q", "esc":
+		m.currentScreen = WelcomeScreen
+		return m, nil
+	case "up", "k":
+		if m.selectedItem > 0 {
+			m.selectedItem--
+		}
+		return m, nil
+	case "down", "j":
+		if m.selectedItem < len(settingsOptions)-1 {
+			m.selectedItem++
+		}
+		return m, nil
+	case "enter":
+		// Navigate to specific settings screen
+		switch m.selectedItem {
+		case 0:
+			m.currentScreen = PathsSettingsScreen
+		case 1:
+			m.currentScreen = CDRippingSettingsScreen
+		case 2:
+			m.currentScreen = ToolsSettingsScreen
+		case 3:
+			m.currentScreen = UISettingsScreen
+		}
+		m.selectedItem = 0
+		return m, nil
 	}
 	return m, nil
 }
@@ -103,6 +180,18 @@ func (m model) View() string {
 			Margin(10, 0)
 		return loading.Render("Loading...")
 	}
+	
+	switch m.currentScreen {
+	case WelcomeScreen:
+		return m.renderWelcome()
+	case SettingsMenuScreen:
+		return m.renderSettingsMenu()
+	default:
+		return m.renderWelcome()
+	}
+}
+
+func (m model) renderWelcome() string {
 
 	// Header section
 	title := titleStyle.Render("🎵 Media Ripper TUI")
@@ -131,14 +220,19 @@ func (m model) View() string {
 		featureList += featureStyle.Render(feature) + "\n"
 	}
 
-	// Status section
-	status := statusStyle.Render("🎉 Status: Initial setup complete!")
+	// Status section with config info
+	configPath := "~/.config/media-ripper/config.toml"
+	if m.config != nil {
+		configPath = config.GetConfigPath()
+	}
+	status := statusStyle.Render("🎉 Status: Configuration loaded!")
+	configInfo := descriptionStyle.Render(fmt.Sprintf("Config: %s", configPath))
 
 	// Help section
-	help := helpStyle.Render("Press 'q' or Ctrl+C to quit")
+	help := helpStyle.Render("Press 's' for Settings, 'q' or Ctrl+C to quit")
 
 	// Combine all content
-	content := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",
+	content := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",
 		title,
 		subtitle,
 		welcome,
@@ -146,10 +240,54 @@ func (m model) View() string {
 		featuresHeader,
 		featureList,
 		status,
+		configInfo,
 		help,
 	)
 
 	// Wrap everything in the container with blue border
+	return containerStyle.Render(content)
+}
+
+func (m model) renderSettingsMenu() string {
+	title := titleStyle.Render("⚙️ Settings")
+	subtitle := subtitleStyle.Render("Choose a category to configure")
+	
+	settingsOptions := []string{
+		"📁 Paths",
+		"💿 CD Ripping", 
+		"🔧 Tools",
+		"🎨 UI Settings",
+	}
+	
+	var options string
+	for i, option := range settingsOptions {
+		if i == m.selectedItem {
+			// Highlighted option
+			selected := lipgloss.NewStyle().
+				Foreground(accent).
+				Bold(true).
+				Background(lightBlue).
+				Padding(0, 1).
+				Margin(0, 2)
+			options += selected.Render("▶ "+option) + "\n"
+		} else {
+			// Regular option
+			regular := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Margin(0, 2)
+			options += regular.Render("  "+option) + "\n"
+		}
+	}
+	
+	help := helpStyle.Render("↑/↓ or j/k to navigate • Enter to select • Esc/q to go back")
+	
+	content := fmt.Sprintf("%s\n%s\n\n%s\n%s",
+		title,
+		subtitle,
+		options,
+		help,
+	)
+	
 	return containerStyle.Render(content)
 }
 

@@ -120,23 +120,19 @@ func DefaultConfig() *Config {
 
 // Load reads configuration from a TOML file
 func Load(configPath string) (*Config, error) {
-	config := DefaultConfig()
+config := DefaultConfig()
 
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Return default config if file doesn't exist
-			return config, nil
-		}
-		return nil, err
-	}
+data, err := os.ReadFile(configPath)
+if err != nil {
+return nil, err
+}
 
-	err = toml.Unmarshal(data, config)
-	if err != nil {
-		return nil, err
-	}
+err = toml.Unmarshal(data, config)
+if err != nil {
+ return nil, err
+}
 
-	return config, nil
+return config, nil
 }
 
 // Save writes the configuration to a TOML file
@@ -563,15 +559,48 @@ func isExecutable(path string) bool {
 
 // LoadAndValidate loads configuration from file and validates it
 func LoadAndValidate(configPath string) (*Config, error) {
-	config, err := Load(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
+config, err := Load(configPath)
+if err != nil {
+return nil, fmt.Errorf("failed to load config: %w", err)
+}
 
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("config validation failed: %w", err)
-	}
+if err := config.Validate(); err != nil {
+return nil, fmt.Errorf("config validation failed: %w", err)
+}
 
-	return config, nil
+return config, nil
+}
+
+// InitializeConfig loads or creates a configuration file with smart defaults
+func InitializeConfig() (*Config, error) {
+	configPath := GetConfigPath()
+	
+	// Try to load existing config
+	config, err := LoadAndValidate(configPath)
+	if err == nil {
+		return config, nil
+	}
+	
+	// If loading failed, check if it's just a missing file
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		// Create default config
+		config = DefaultConfig()
+		
+		// Validate and auto-detect tools
+		if validateErr := config.Validate(); validateErr != nil {
+			// Log validation issues but don't fail initialization
+			fmt.Printf("Warning: %v\n", validateErr)
+		}
+		
+		// Save the default config for future use
+		if saveErr := config.Save(configPath); saveErr != nil {
+			fmt.Printf("Warning: Could not save default config: %v\n", saveErr)
+		}
+		
+		return config, nil
+	}
+	
+	// If file exists but has errors, return the error
+	return nil, fmt.Errorf("failed to initialize config: %w", err)
 }
 
