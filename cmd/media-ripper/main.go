@@ -86,6 +86,8 @@ type model struct {
 	config        *config.Config
 	currentScreen Screen
 	selectedItem  int
+	isEditing     bool
+	editValue     string
 }
 
 func initialModel() model {
@@ -101,6 +103,8 @@ func initialModel() model {
 		config:        cfg,
 		currentScreen: WelcomeScreen,
 		selectedItem:  0,
+		isEditing:     false,
+		editValue:     "",
 	}
 }
 
@@ -116,9 +120,89 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateWelcome(msg)
 		case SettingsMenuScreen:
 			return m.updateSettingsMenu(msg)
+		case PathsSettingsScreen:
+			return m.updatePathsSettings(msg)
 		// Add other screen handlers as needed
 		default:
 			return m.updateWelcome(msg)
+		}
+	}
+	return m, nil
+}
+
+func (m model) updatePathsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	pathsFields := []string{"Music Directory", "Movies Directory", "Config Directory", "Log File"}
+	
+	if m.isEditing {
+		// Handle editing mode
+		switch msg.String() {
+		case "enter":
+			// Save the edited value
+			switch m.selectedItem {
+			case 0:
+				m.config.Paths.Music = m.editValue
+			case 1:
+				m.config.Paths.Movies = m.editValue
+			case 2:
+				m.config.Paths.Config = m.editValue
+			case 3:
+				m.config.Paths.LogFile = m.editValue
+			}
+			// Save config to file
+			if err := m.config.Save(config.GetConfigPath()); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		case "esc":
+			// Cancel editing
+			m.isEditing = false
+			m.editValue = ""
+			return m, nil
+		default:
+			// Handle text input
+			if msg.String() == "backspace" {
+				if len(m.editValue) > 0 {
+					m.editValue = m.editValue[:len(m.editValue)-1]
+				}
+			} else if len(msg.String()) == 1 {
+				// Add character to edit value
+				m.editValue += msg.String()
+			}
+			return m, nil
+		}
+	} else {
+		// Handle navigation mode
+		switch msg.String() {
+		case "q", "esc":
+			m.currentScreen = SettingsMenuScreen
+			return m, nil
+		case "up", "k":
+			if m.selectedItem > 0 {
+				m.selectedItem--
+			}
+			return m, nil
+		case "down", "j":
+			if m.selectedItem < len(pathsFields)-1 {
+				m.selectedItem++
+			}
+			return m, nil
+		case "enter":
+			// Start editing the selected field
+			m.isEditing = true
+			// Set current value as edit value
+			switch m.selectedItem {
+			case 0:
+				m.editValue = m.config.Paths.Music
+			case 1:
+				m.editValue = m.config.Paths.Movies
+			case 2:
+				m.editValue = m.config.Paths.Config
+			case 3:
+				m.editValue = m.config.Paths.LogFile
+			}
+			return m, nil
 		}
 	}
 	return m, nil
@@ -186,6 +270,8 @@ func (m model) View() string {
 		return m.renderWelcome()
 	case SettingsMenuScreen:
 		return m.renderSettingsMenu()
+	case PathsSettingsScreen:
+		return m.renderPathsSettings()
 	default:
 		return m.renderWelcome()
 	}
@@ -245,6 +331,76 @@ func (m model) renderWelcome() string {
 	)
 
 	// Wrap everything in the container with blue border
+	return containerStyle.Render(content)
+}
+
+func (m model) renderPathsSettings() string {
+	title := titleStyle.Render("📁 Paths Settings")
+	subtitle := subtitleStyle.Render("Configure directory paths and log file location")
+	
+	pathsFields := []string{"Music Directory", "Movies Directory", "Config Directory", "Log File"}
+	pathsValues := []string{
+		m.config.Paths.Music,
+		m.config.Paths.Movies,
+		m.config.Paths.Config,
+		m.config.Paths.LogFile,
+	}
+	
+	var fields string
+	for i, field := range pathsFields {
+		value := pathsValues[i]
+		if m.isEditing && i == m.selectedItem {
+			// Show edit value with cursor
+			value = m.editValue + "█" // Block cursor
+		}
+		
+		if i == m.selectedItem {
+			// Highlighted field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(accent).
+				Bold(true).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(lightBlue).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1).
+				Margin(0, 2)
+			
+			if m.isEditing {
+				// Editing mode styling
+				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
+			}
+			
+			fields += fieldStyle.Render("▶ "+field+":") + "\n"
+			fields += valueStyle.Render(value) + "\n\n"
+		} else {
+			// Regular field
+			fieldStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Margin(0, 2)
+			valueStyle := lipgloss.NewStyle().
+				Foreground(gray).
+				Margin(0, 2)
+			
+			fields += fieldStyle.Render("  "+field+":") + "\n"
+			fields += valueStyle.Render("  "+value) + "\n\n"
+		}
+	}
+	
+	var help string
+	if m.isEditing {
+		help = helpStyle.Render("Type to edit • Enter to save • Esc to cancel")
+	} else {
+		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter to edit • Esc/q to go back")
+	}
+	
+	content := fmt.Sprintf("%s\n%s\n\n%s%s",
+		title,
+		subtitle,
+		fields,
+		help,
+	)
+	
 	return containerStyle.Render(content)
 }
 
