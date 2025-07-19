@@ -1,0 +1,36 @@
+[drives]
+cd_drive = "/dev/sr0"
+auto_detect = true
+available = ["/dev/sr0", "/dev/sr1", "/dev/cdrom"]
+
+[paths]
+music = "/mnt/nas/media/music"
+movies = "/mnt/nas/media/movies"
+config = "~/.config/media-ripper"
+log_file = "~/cd-ripper.log"
+
+[cd_ripping]
+retry_count = 3
+retry_delay = 5
+initial_wait = 10
+auto_eject = true
+output_format = "flac"
+cddb_method = "musicbrainz"
+
+[execution]
+preferred_backend = "native"
+verbose_logging = true
+
+[tools]
+abcde_path = ""
+cd_discid_path = ""
+makemkv_path = ""
+
+[ui]
+theme = "default"
+refresh_rate = 100
+
+[container]
+image = "media-ripper:latest"
+pull_policy = "if_not_present"
+enabled = false

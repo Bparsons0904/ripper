@@ -1,0 +1,60 @@
+# Media Ripper Configuration Example
+# This file shows all available configuration options with their default values
+
+[drives]
+# Primary optical drive device
+cd_drive = "/dev/sr0"
+# Auto-detect available drives on startup
+auto_detect = true
+# Available drives (auto-populated)
+available = ["/dev/sr0", "/dev/sr1", "/dev/cdrom"]
+
+[paths]
+# Music output directory
+music = "/mnt/nas/media/music"
+# Movies output directory  
+movies = "/mnt/nas/media/movies"
+# Configuration directory
+config = "~/.config/media-ripper"
+# Log file location
+log_file = "~/cd-ripper.log"
+
+[cd_ripping]
+# Number of retry attempts for failed operations
+retry_count = 3
+# Delay between retries (seconds)
+retry_delay = 5
+# Initial wait for drive to stabilize (seconds)
+initial_wait = 10
+# Auto-eject disc after successful rip
+auto_eject = true
+# Output format for audio (flac, mp3, ogg)
+output_format = "flac"
+# CDDB lookup method (musicbrainz, cddb, none)
+cddb_method = "musicbrainz"
+
+[execution]
+# Preferred backend (native, container)
+preferred_backend = "native"
+# Enable detailed logging
+verbose_logging = true
+
+[tools]
+# Paths to external tools (auto-detected if empty)
+abcde_path = ""
+cd_discid_path = ""
+makemkv_path = ""
+
+[ui]
+# Theme colors (will be customizable later)
+theme = "default"
+# Auto-refresh interval for progress (milliseconds)
+refresh_rate = 100
+
+[container]
+# Docker image for containerized execution
+image = "media-ripper:latest"
+# Pull policy for container images
+pull_policy = "if_not_present"
+# Enable container support
+enabled = false
