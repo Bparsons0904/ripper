@@ -1396,10 +1396,11 @@ func (m model) renderCDRipping() string {
 	} else {
 		cdStatus = "✅ CD detected"
 		
-		// Show CD information
+		// Show CD information with constrained width
 		cdInfoStyle := lipgloss.NewStyle().
 			Foreground(lightBlue).
 			Bold(true).
+			Width(60).  // Constrain width to prevent overflow
 			Margin(0, 2, 1, 2)
 		
 		var yearInfo string
@@ -1407,18 +1408,29 @@ func (m model) renderCDRipping() string {
 			yearInfo = fmt.Sprintf(" (%s)", m.cdInfo.Year)
 		}
 		
+		// Truncate long text to prevent layout issues
+		artist := m.cdInfo.Artist
+		if len(artist) > 30 {
+			artist = artist[:27] + "..."
+		}
+		
+		album := m.cdInfo.Album
+		if len(album) > 30 {
+			album = album[:27] + "..."
+		}
+		
 		// Show metadata source info
 		var metadataSource string
 		if m.cdInfo.Artist != "Unknown Artist" || m.cdInfo.Album != "Unknown Album" {
-			metadataSource = fmt.Sprintf("\nMetadata: %s", m.config.CDRipping.CDDBMethod)
+			metadataSource = fmt.Sprintf("Metadata: %s", m.config.CDRipping.CDDBMethod)
 		} else {
-			metadataSource = "\nMetadata: Basic disc info only"
+			metadataSource = "Metadata: Basic disc info only"
 		}
 		
 		cdInfoDisplay = cdInfoStyle.Render(fmt.Sprintf(
-			"Artist: %s\nAlbum: %s%s\nTracks: %d%s",
-			m.cdInfo.Artist,
-			m.cdInfo.Album,
+			"Artist: %s\nAlbum: %s%s\nTracks: %d\n%s",
+			artist,
+			album,
 			yearInfo,
 			m.cdInfo.TrackCount,
 			metadataSource,
