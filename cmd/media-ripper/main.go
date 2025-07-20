@@ -6,21 +6,21 @@ import (
 	"os/exec"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/Bparsons0904/ripper/internal/config"
 	"github.com/Bparsons0904/ripper/internal/drives"
 	"github.com/Bparsons0904/ripper/internal/ripper"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 var (
 	// Color palette
-	primaryBlue   = lipgloss.Color("39")   // Bright blue
-	lightBlue     = lipgloss.Color("75")   // Light blue
-	darkBlue      = lipgloss.Color("25")   // Dark blue
-	accent        = lipgloss.Color("99")   // Purple
-	gray          = lipgloss.Color("250")  // Lighter gray
-	green         = lipgloss.Color("46")   // Success green
+	primaryBlue = lipgloss.Color("39")  // Bright blue
+	lightBlue   = lipgloss.Color("75")  // Light blue
+	darkBlue    = lipgloss.Color("25")  // Dark blue
+	accent      = lipgloss.Color("99")  // Purple
+	gray        = lipgloss.Color("250") // Lighter gray
+	green       = lipgloss.Color("46")  // Success green
 
 	// Main container with blue border
 	containerStyle = lipgloss.NewStyle().
@@ -50,13 +50,13 @@ var (
 			Margin(0, 0, 1, 0)
 
 	descriptionStyle = lipgloss.NewStyle().
-			Foreground(gray).
-			Margin(0, 0, 2, 0)
+				Foreground(gray).
+				Margin(0, 0, 2, 0)
 
 	featuresHeaderStyle = lipgloss.NewStyle().
-			Foreground(lightBlue).
-			Bold(true).
-			Margin(0, 0, 1, 0)
+				Foreground(lightBlue).
+				Bold(true).
+				Margin(0, 0, 1, 0)
 
 	featureStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("255")).
@@ -98,19 +98,20 @@ const (
 )
 
 type model struct {
-	ready         bool
-	config        *config.Config
-	currentScreen Screen
-	selectedItem  int
-	isEditing     bool
-	editValue     string
+	ready           bool
+	config          *config.Config
+	currentScreen   Screen
+	selectedItem    int
+	isEditing       bool
+	editValue       string
 	availableDrives []drives.DriveInfo
-	isRipping     bool
+	isRipping       bool
 	rippingProgress int
-	rippingStatus string
-	cdRipper      *ripper.CDRipper
-	cdInfo        *ripper.CDInfo
-	spinnerFrame  int
+	rippingStatus   string
+	cdRipper        *ripper.CDRipper
+	cdInfo          *ripper.CDInfo
+	spinnerFrame    int
+	abcdeCmd        *exec.Cmd // Track the running command
 }
 
 func initialModel() model {
@@ -120,14 +121,14 @@ func initialModel() model {
 		fmt.Printf("Error initializing config: %v\n", err)
 		cfg = config.DefaultConfig() // fallback to defaults
 	}
-	
+
 	// Detect available drives
 	availableDrives, err := drives.DetectDrives()
 	if err != nil {
 		fmt.Printf("Warning: Could not detect drives: %v\n", err)
 		availableDrives = []drives.DriveInfo{}
 	}
-	
+
 	// Initialize CD ripper
 	cdRipper := ripper.NewCDRipper(cfg)
 
@@ -145,6 +146,7 @@ func initialModel() model {
 		cdRipper:        cdRipper,
 		cdInfo:          nil,
 		spinnerFrame:    0,
+		abcdeCmd:        nil,
 	}
 }
 
@@ -170,7 +172,7 @@ func startRippingCmd(cdRipper *ripper.CDRipper, cdInfo *ripper.CDInfo) tea.Cmd {
 		}()
 		// Return a message to indicate ripping started
 		return rippingProgressMsg(ripper.ProgressInfo{
-			Status: "Ripping started...",
+			Status:   "Ripping started...",
 			Progress: 0,
 		})
 	})
@@ -203,7 +205,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cdInfo = nil
 		} else {
 			m.cdInfo = msg.cdInfo
-			m.rippingStatus = ""  // Clear status once CD is detected successfully
+			m.rippingStatus = "" // Clear status once CD is detected successfully
 		}
 		return m, nil
 	case rippingProgressMsg:
@@ -252,7 +254,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateUISettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	uiFields := []string{"Theme", "Refresh Rate (ms)"}
-	
+
 	if m.isEditing {
 		// Handle editing mode
 		switch msg.String() {
@@ -325,8 +327,15 @@ func (m model) updateUISettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateCDRippingSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	cdFields := []string{"Retry Count", "Retry Delay (sec)", "Initial Wait (sec)", "Auto Eject", "Output Format", "CDDB Method"}
-	
+	cdFields := []string{
+		"Retry Count",
+		"Retry Delay (sec)",
+		"Initial Wait (sec)",
+		"Auto Eject",
+		"Output Format",
+		"CDDB Method",
+	}
+
 	if m.isEditing {
 		// Handle editing mode
 		switch msg.String() {
@@ -478,7 +487,7 @@ func parseInt(s string) int {
 
 func (m model) updateToolsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	toolsFields := []string{"ABCDE Path", "cd-discid Path", "MakeMKV Path"}
-	
+
 	if m.isEditing {
 		// Handle editing mode
 		switch msg.String() {
@@ -552,7 +561,7 @@ func (m model) updateToolsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updatePathsSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	pathsFields := []string{"Music Directory", "Movies Directory", "Config Directory", "Log File"}
-	
+
 	if m.isEditing {
 		// Handle editing mode
 		switch msg.String() {
@@ -648,12 +657,12 @@ func (m model) updateDrivesSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Update config with selected drive
 			selectedDrive := m.availableDrives[m.selectedItem]
 			m.config.Drives.CDDrive = selectedDrive.Device
-			
+
 			// Save config
 			if err := m.config.Save(config.GetConfigPath()); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
-			
+
 			// Return to settings menu
 			m.currentScreen = SettingsMenuScreen
 			return m, nil
@@ -693,7 +702,7 @@ func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateSettingsMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	settingsOptions := []string{"Drives", "Paths", "CD Ripping", "Tools", "UI Settings"}
-	
+
 	switch msg.String() {
 	case "q", "esc":
 		m.currentScreen = WelcomeScreen
@@ -737,7 +746,7 @@ func (m model) View() string {
 			Margin(10, 0)
 		return loading.Render("Loading...")
 	}
-	
+
 	switch m.currentScreen {
 	case WelcomeScreen:
 		return m.renderWelcome()
@@ -761,7 +770,6 @@ func (m model) View() string {
 }
 
 func (m model) renderWelcome() string {
-
 	// Header section
 	title := titleStyle.Render("🎵 Media Ripper TUI")
 	subtitle := subtitleStyle.Render("A Terminal UI for ripping CDs, DVDs, and Blu-rays")
@@ -820,22 +828,22 @@ func (m model) renderWelcome() string {
 func (m model) renderUISettings() string {
 	title := titleStyle.Render("🎨 UI Settings")
 	subtitle := subtitleStyle.Render("Configure user interface preferences")
-	
+
 	uiFields := []string{"Theme", "Refresh Rate (ms)"}
 	uiValues := []string{
 		m.config.UI.Theme,
 		fmt.Sprintf("%d", m.config.UI.RefreshRate),
 	}
-	
+
 	var fields string
 	for i, field := range uiFields {
 		value := uiValues[i]
-		
+
 		if m.isEditing && i == m.selectedItem {
 			// Show edit value with cursor
 			value = m.editValue + "█" // Block cursor
 		}
-		
+
 		if i == m.selectedItem {
 			// Highlighted field
 			fieldStyle := lipgloss.NewStyle().
@@ -847,12 +855,12 @@ func (m model) renderUISettings() string {
 				Background(lipgloss.Color("235")).
 				Padding(0, 1).
 				Margin(0, 2)
-			
+
 			if m.isEditing {
 				// Editing mode styling
 				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
 			}
-			
+
 			fields += fieldStyle.Render("▶ "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		} else {
@@ -863,12 +871,12 @@ func (m model) renderUISettings() string {
 			valueStyle := lipgloss.NewStyle().
 				Foreground(gray).
 				Margin(0, 2)
-			
+
 			fields += fieldStyle.Render("  "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		}
 	}
-	
+
 	// Add helpful hints
 	hintsStyle := lipgloss.NewStyle().
 		Foreground(gray).
@@ -877,14 +885,14 @@ func (m model) renderUISettings() string {
 	hints := hintsStyle.Render(
 		"Hints: Theme can be any string • Refresh Rate must be between 50-1000ms for smooth performance",
 	)
-	
+
 	var help string
 	if m.isEditing {
 		help = helpStyle.Render("Type to edit • Enter to save • Esc to cancel")
 	} else {
 		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter to edit • Esc/q to go back")
 	}
-	
+
 	content := fmt.Sprintf("%s\n%s\n\n%s%s\n%s",
 		title,
 		subtitle,
@@ -892,33 +900,35 @@ func (m model) renderUISettings() string {
 		hints,
 		help,
 	)
-	
+
 	return containerStyle.Render(content)
 }
 
 func (m model) renderToolsSettings() string {
 	title := titleStyle.Render("🔧 Tools Settings")
-	subtitle := subtitleStyle.Render("Configure external tool paths (leave empty for auto-detection)")
-	
+	subtitle := subtitleStyle.Render(
+		"Configure external tool paths (leave empty for auto-detection)",
+	)
+
 	toolsFields := []string{"ABCDE Path", "cd-discid Path", "MakeMKV Path"}
 	toolsValues := []string{
 		m.config.Tools.AbcdePath,
 		m.config.Tools.CDDiscidPath,
 		m.config.Tools.MakeMKVPath,
 	}
-	
+
 	var fields string
 	for i, field := range toolsFields {
 		value := toolsValues[i]
 		if value == "" {
 			value = "(auto-detect)"
 		}
-		
+
 		if m.isEditing && i == m.selectedItem {
 			// Show edit value with cursor
 			value = m.editValue + "█" // Block cursor
 		}
-		
+
 		if i == m.selectedItem {
 			// Highlighted field
 			fieldStyle := lipgloss.NewStyle().
@@ -930,7 +940,7 @@ func (m model) renderToolsSettings() string {
 				Background(lipgloss.Color("235")).
 				Padding(0, 1).
 				Margin(0, 2)
-			
+
 			if m.isEditing {
 				// Editing mode styling
 				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
@@ -938,7 +948,7 @@ func (m model) renderToolsSettings() string {
 				// Special styling for auto-detect
 				valueStyle = valueStyle.Foreground(gray).Italic(true)
 			}
-			
+
 			fields += fieldStyle.Render("▶ "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		} else {
@@ -949,17 +959,17 @@ func (m model) renderToolsSettings() string {
 			valueStyle := lipgloss.NewStyle().
 				Foreground(gray).
 				Margin(0, 2)
-			
+
 			if toolsValues[i] == "" {
 				// Special styling for auto-detect
 				valueStyle = valueStyle.Italic(true)
 			}
-			
+
 			fields += fieldStyle.Render("  "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		}
 	}
-	
+
 	// Add helpful hints
 	hintsStyle := lipgloss.NewStyle().
 		Foreground(gray).
@@ -968,14 +978,16 @@ func (m model) renderToolsSettings() string {
 	hints := hintsStyle.Render(
 		"Hints: Leave paths empty for automatic detection in PATH • Use absolute paths like /usr/bin/abcde",
 	)
-	
+
 	var help string
 	if m.isEditing {
-		help = helpStyle.Render("Type path or clear for auto-detect • Enter to save • Esc to cancel")
+		help = helpStyle.Render(
+			"Type path or clear for auto-detect • Enter to save • Esc to cancel",
+		)
 	} else {
 		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter to edit • Esc/q to go back")
 	}
-	
+
 	content := fmt.Sprintf("%s\n%s\n\n%s%s\n%s",
 		title,
 		subtitle,
@@ -983,15 +995,22 @@ func (m model) renderToolsSettings() string {
 		hints,
 		help,
 	)
-	
+
 	return containerStyle.Render(content)
 }
 
 func (m model) renderCDRippingSettings() string {
 	title := titleStyle.Render("💿 CD Ripping Settings")
 	subtitle := subtitleStyle.Render("Configure CD ripping behavior and formats")
-	
-	cdFields := []string{"Retry Count", "Retry Delay (sec)", "Initial Wait (sec)", "Auto Eject", "Output Format", "CDDB Method"}
+
+	cdFields := []string{
+		"Retry Count",
+		"Retry Delay (sec)",
+		"Initial Wait (sec)",
+		"Auto Eject",
+		"Output Format",
+		"CDDB Method",
+	}
 	cdValues := []string{
 		fmt.Sprintf("%d", m.config.CDRipping.RetryCount),
 		fmt.Sprintf("%d", m.config.CDRipping.RetryDelay),
@@ -1000,11 +1019,11 @@ func (m model) renderCDRippingSettings() string {
 		m.config.CDRipping.OutputFormat,
 		m.config.CDRipping.CDDBMethod,
 	}
-	
+
 	var fields string
 	for i, field := range cdFields {
 		value := cdValues[i]
-		
+
 		// Special handling for boolean fields
 		if i == 3 { // Auto Eject
 			if m.config.CDRipping.AutoEject {
@@ -1013,13 +1032,13 @@ func (m model) renderCDRippingSettings() string {
 				value = "✗ No" // X mark
 			}
 		}
-		
+
 		// Special handling for editing mode
 		if m.isEditing && i == m.selectedItem && i != 3 && i != 4 && i != 5 {
 			// Show edit value with cursor (skip for boolean and selectable)
 			value = m.editValue + "█" // Block cursor
 		}
-		
+
 		// Add cycling indicators for selectable options
 		if i == 4 { // Output Format
 			formats := []string{"flac", "mp3", "ogg", "wav"}
@@ -1038,7 +1057,7 @@ func (m model) renderCDRippingSettings() string {
 				}
 			}
 		}
-		
+
 		if i == m.selectedItem {
 			// Highlighted field
 			fieldStyle := lipgloss.NewStyle().
@@ -1050,7 +1069,7 @@ func (m model) renderCDRippingSettings() string {
 				Background(lipgloss.Color("235")).
 				Padding(0, 1).
 				Margin(0, 2)
-			
+
 			if m.isEditing && i != 3 && i != 4 && i != 5 {
 				// Editing mode styling (skip for boolean and selectable)
 				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
@@ -1061,7 +1080,7 @@ func (m model) renderCDRippingSettings() string {
 				// Special styling for selectable options
 				valueStyle = valueStyle.Background(lightBlue).Foreground(lipgloss.Color("0"))
 			}
-			
+
 			fields += fieldStyle.Render("▶ "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		} else {
@@ -1072,12 +1091,12 @@ func (m model) renderCDRippingSettings() string {
 			valueStyle := lipgloss.NewStyle().
 				Foreground(gray).
 				Margin(0, 2)
-			
+
 			fields += fieldStyle.Render("  "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		}
 	}
-	
+
 	// Add validation hints
 	hintsStyle := lipgloss.NewStyle().
 		Foreground(gray).
@@ -1086,14 +1105,14 @@ func (m model) renderCDRippingSettings() string {
 	hints := hintsStyle.Render(
 		"Hints: Retry Count (0-10) • Delays in seconds • Formats: flac, mp3, ogg, wav • CDDB: musicbrainz, cddb, none",
 	)
-	
+
 	var help string
 	if m.isEditing {
 		help = helpStyle.Render("Type to edit • Enter to save • Esc to cancel")
 	} else {
 		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter/Space to edit/toggle/cycle • Esc/q to go back")
 	}
-	
+
 	content := fmt.Sprintf("%s\n%s\n\n%s%s\n%s",
 		title,
 		subtitle,
@@ -1101,14 +1120,14 @@ func (m model) renderCDRippingSettings() string {
 		hints,
 		help,
 	)
-	
+
 	return containerStyle.Render(content)
 }
 
 func (m model) renderPathsSettings() string {
 	title := titleStyle.Render("📁 Paths Settings")
 	subtitle := subtitleStyle.Render("Configure directory paths and log file location")
-	
+
 	pathsFields := []string{"Music Directory", "Movies Directory", "Config Directory", "Log File"}
 	pathsValues := []string{
 		m.config.Paths.Music,
@@ -1116,7 +1135,7 @@ func (m model) renderPathsSettings() string {
 		m.config.Paths.Config,
 		m.config.Paths.LogFile,
 	}
-	
+
 	var fields string
 	for i, field := range pathsFields {
 		value := pathsValues[i]
@@ -1124,7 +1143,7 @@ func (m model) renderPathsSettings() string {
 			// Show edit value with cursor
 			value = m.editValue + "█" // Block cursor
 		}
-		
+
 		if i == m.selectedItem {
 			// Highlighted field
 			fieldStyle := lipgloss.NewStyle().
@@ -1136,12 +1155,12 @@ func (m model) renderPathsSettings() string {
 				Background(lipgloss.Color("235")).
 				Padding(0, 1).
 				Margin(0, 2)
-			
+
 			if m.isEditing {
 				// Editing mode styling
 				valueStyle = valueStyle.Background(accent).Foreground(lipgloss.Color("0"))
 			}
-			
+
 			fields += fieldStyle.Render("▶ "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		} else {
@@ -1152,41 +1171,41 @@ func (m model) renderPathsSettings() string {
 			valueStyle := lipgloss.NewStyle().
 				Foreground(gray).
 				Margin(0, 2)
-			
+
 			fields += fieldStyle.Render("  "+field+":") + "\n"
 			fields += valueStyle.Render(value) + "\n\n"
 		}
 	}
-	
+
 	var help string
 	if m.isEditing {
 		help = helpStyle.Render("Type to edit • Enter to save • Esc to cancel")
 	} else {
 		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter to edit • Esc/q to go back")
 	}
-	
+
 	content := fmt.Sprintf("%s\n%s\n\n%s%s",
 		title,
 		subtitle,
 		fields,
 		help,
 	)
-	
+
 	return containerStyle.Render(content)
 }
 
 func (m model) renderSettingsMenu() string {
 	title := titleStyle.Render("⚙️ Settings")
 	subtitle := subtitleStyle.Render("Choose a category to configure")
-	
+
 	settingsOptions := []string{
 		"💿 Drives",
 		"📁 Paths",
-		"💿 CD Ripping", 
+		"💿 CD Ripping",
 		"🔧 Tools",
 		"🎨 UI Settings",
 	}
-	
+
 	var options string
 	for i, option := range settingsOptions {
 		if i == m.selectedItem {
@@ -1206,42 +1225,42 @@ func (m model) renderSettingsMenu() string {
 			options += regular.Render("  "+option) + "\n"
 		}
 	}
-	
+
 	help := helpStyle.Render("↑/↓ or j/k to navigate • Enter to select • Esc/q to go back")
-	
+
 	content := fmt.Sprintf("%s\n%s\n\n%s\n%s",
 		title,
 		subtitle,
 		options,
 		help,
 	)
-	
+
 	return containerStyle.Render(content)
 }
 
 func (m model) renderDrivesSettings() string {
 	title := titleStyle.Render("💿 Drives Settings")
 	subtitle := subtitleStyle.Render("Choose and configure optical drives")
-	
+
 	var content string
-	
+
 	if len(m.availableDrives) == 0 {
 		noDrivesStyle := lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true).
 			Align(lipgloss.Center).
 			Margin(2, 0)
-		
+
 		noDriverMessage := noDrivesStyle.Render("No optical drives detected!")
-		
+
 		helpMessage := descriptionStyle.Render(
 			"This could mean:\n" +
-			"• No optical drives are connected\n" +
-			"• Drives are not properly mounted\n" +
-			"• You need elevated permissions to access drives\n\n" +
-			"Press 'r' to refresh detection",
+				"• No optical drives are connected\n" +
+				"• Drives are not properly mounted\n" +
+				"• You need elevated permissions to access drives\n\n" +
+				"Press 'r' to refresh detection",
 		)
-		
+
 		content = fmt.Sprintf("%s\n%s\n\n%s\n%s",
 			title,
 			subtitle,
@@ -1254,34 +1273,34 @@ func (m model) renderDrivesSettings() string {
 			Foreground(green).
 			Bold(true).
 			Margin(0, 2, 1, 2)
-		
+
 		currentSelection := currentDriveStyle.Render(
 			fmt.Sprintf("Current: %s", m.config.Drives.CDDrive),
 		)
-		
+
 		// List available drives
 		var drivesList string
 		for i, drive := range m.availableDrives {
 			var driveInfo string
-			
+
 			// Format drive information
 			mediaInfo := ""
 			if drive.MediaType != "Unknown" {
 				mediaInfo = fmt.Sprintf(" (%s)", drive.MediaType)
 			}
-			
+
 			readOnlyInfo := ""
 			if drive.IsReadOnly {
 				readOnlyInfo = " [Read-Only]"
 			}
-			
-			driveInfo = fmt.Sprintf("%s - %s%s%s", 
-				drive.Device, 
-				drive.Model, 
+
+			driveInfo = fmt.Sprintf("%s - %s%s%s",
+				drive.Device,
+				drive.Model,
 				mediaInfo,
 				readOnlyInfo,
 			)
-			
+
 			if i == m.selectedItem {
 				// Highlighted drive
 				selectedStyle := lipgloss.NewStyle().
@@ -1299,7 +1318,7 @@ func (m model) renderDrivesSettings() string {
 				drivesList += regularStyle.Render("  "+driveInfo) + "\n"
 			}
 		}
-		
+
 		content = fmt.Sprintf("%s\n%s\n\n%s\n\n%s",
 			title,
 			subtitle,
@@ -1307,7 +1326,7 @@ func (m model) renderDrivesSettings() string {
 			drivesList,
 		)
 	}
-	
+
 	// Help section
 	var help string
 	if len(m.availableDrives) == 0 {
@@ -1315,7 +1334,7 @@ func (m model) renderDrivesSettings() string {
 	} else {
 		help = helpStyle.Render("↑/↓ or j/k to navigate • Enter/Space to select • 'r' to refresh • Esc/q to go back")
 	}
-	
+
 	finalContent := fmt.Sprintf("%s\n%s", content, help)
 	return containerStyle.Render(finalContent)
 }
@@ -1325,10 +1344,24 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// During ripping, only allow quit
 		switch msg.String() {
 		case "q", "esc":
-			fmt.Printf("DEBUG: User cancelled ripping\n")
+			// Kill the running abcde process if it exists
+			if m.abcdeCmd != nil && m.abcdeCmd.Process != nil {
+				if err := m.abcdeCmd.Process.Kill(); err != nil {
+					fmt.Printf("Failed to kill abcde process: %v\n", err)
+				}
+			}
+			
 			m.isRipping = false
 			m.rippingProgress = 0
 			m.rippingStatus = ""
+			m.abcdeCmd = nil
+			
+			// Clean up abcde working directories on cancellation
+			go func() {
+				cleanupCmd := exec.Command("sh", "-c", fmt.Sprintf("rm -rf '%s'/abcde.* 2>/dev/null || true", m.config.Paths.Music))
+				cleanupCmd.Run() // Ignore errors - cleanup is best effort
+			}()
+			
 			m.currentScreen = WelcomeScreen
 			return m, nil
 		}
@@ -1341,52 +1374,47 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentScreen = WelcomeScreen
 		return m, nil
 	case "enter", " ":
-		// Simple rip start - no progress tracking for now
-		fmt.Printf("DEBUG: Enter pressed - Drive: '%s', CDInfo: %v\n", m.config.Drives.CDDrive, m.cdInfo != nil)
-		
 		if m.config.Drives.CDDrive != "" && m.cdInfo != nil {
-			fmt.Printf("DEBUG: Starting simple rip\n")
 			m.isRipping = true
-			m.rippingStatus = "Ripping in progress..."
+			// Use album name in status if available
+			albumName := m.cdInfo.Album
+			if albumName == "Unknown Album" || albumName == "" {
+				albumName = "CD"
+			}
+			m.rippingStatus = fmt.Sprintf("Ripping %s", albumName)
 			m.spinnerFrame = 0
-			// Just start ripping without progress tracking
+			
+			// Create the command first so we can track it
+			cmd := exec.Command("abcde",
+				"-d", m.config.Drives.CDDrive,
+				"-o", m.config.CDRipping.OutputFormat,
+				"-a", "default", // Use default actions (cddb,read,encode,tag,move,clean)
+			)
+			cmd.Dir = m.config.Paths.Music
+			cmd.Env = append(os.Environ(),
+				"OUTPUTDIR="+m.config.Paths.Music,
+				"OUTPUTFORMAT=${ARTISTFILE}/${ALBUMFILE}/${TRACKNUM}_${TRACKFILE}",
+			)
+			
+			// Store the command reference so we can kill it if needed
+			m.abcdeCmd = cmd
+			
+			// Start ripping in background
 			go func() {
-				fmt.Printf("DEBUG: Starting abcde command\n")
-				fmt.Printf("DEBUG: Output dir: %s\n", m.config.Paths.Music)
-				
 				// Create output directory if it doesn't exist
 				if err := os.MkdirAll(m.config.Paths.Music, 0755); err != nil {
-					fmt.Printf("DEBUG: Failed to create output dir: %v\n", err)
 					return
 				}
-				
-				// Run abcde with proper output directory
-				cmd := exec.Command("abcde", 
-					"-d", m.config.Drives.CDDrive,
-					"-o", m.config.CDRipping.OutputFormat,
-					"-a", "default",  // Use default actions (cddb,read,encode,tag,move,clean)
-				)
-				
-				// Set working directory to output location
-				cmd.Dir = m.config.Paths.Music
-				
-				// Set environment variables for abcde
-				cmd.Env = append(os.Environ(),
-					"OUTPUTDIR="+m.config.Paths.Music,
-					"OUTPUTFORMAT=${ARTISTFILE}/${ALBUMFILE}/${TRACKNUM}_${TRACKFILE}",
-				)
-				
-				fmt.Printf("DEBUG: Running: %s in %s\n", cmd.String(), cmd.Dir)
-				
-				if err := cmd.Run(); err != nil {
-					fmt.Printf("DEBUG: abcde failed: %v\n", err)
-				} else {
-					fmt.Printf("DEBUG: abcde completed successfully\n")
-				}
+
+				// Clean up any previous abcde working directories to avoid version conflicts
+				cleanupCmd := exec.Command("sh", "-c", fmt.Sprintf("rm -rf '%s'/abcde.* 2>/dev/null || true", m.config.Paths.Music))
+				cleanupCmd.Run()
+
+				// Run abcde
+				cmd.CombinedOutput()
 			}()
 			return m, spinnerCmd()
 		} else {
-			fmt.Printf("DEBUG: Cannot start rip - missing drive or CD info\n")
 			m.rippingStatus = "Cannot start: No drive configured or CD not detected"
 		}
 	case "r":
@@ -1403,52 +1431,58 @@ func (m model) renderCDRipping() string {
 	
 	if m.isRipping {
 		// Show ripping progress with spinner
-		subtitle := subtitleStyle.Render("Ripping in progress...")
-		
+		subtitle := subtitleStyle.Render("Processing...")
+
 		// Spinner animation
 		spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		currentSpinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-		
+
 		spinnerStyle := lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true).
 			Margin(1, 2)
+
+		spinnerDisplay := spinnerStyle.Render(currentSpinner)
+		statusStyle := lipgloss.NewStyle().
+			Foreground(lightBlue).
+			Margin(1, 2)
+		statusDisplay := statusStyle.Render(m.rippingStatus)
 		
-		spinnerDisplay := spinnerStyle.Render(fmt.Sprintf("%s %s", currentSpinner, m.rippingStatus))
-		
+		spinnerRow := lipgloss.JoinHorizontal(lipgloss.Center, spinnerDisplay, statusDisplay)
+
 		help := helpStyle.Render("Press 'q' or Esc to cancel ripping")
-		
+
 		content := fmt.Sprintf("%s\n%s\n\n%s\n\n%s",
 			title,
 			subtitle,
-			spinnerDisplay,
+			spinnerRow,
 			help,
 		)
-		
+
 		return containerStyle.Render(content)
 	}
-	
+
 	// Show CD info and ripping options
 	subtitle := subtitleStyle.Render("Insert a CD and start ripping")
-	
+
 	// Current drive info
 	currentDriveStyle := lipgloss.NewStyle().
 		Foreground(lightBlue).
 		Bold(true).
 		Margin(1, 2)
-	
+
 	driveInfo := currentDriveStyle.Render(
 		fmt.Sprintf("Drive: %s", m.config.Drives.CDDrive),
 	)
-	
+
 	// CD detection status and info
 	cdStatusStyle := lipgloss.NewStyle().
 		Foreground(gray).
 		Margin(0, 2, 1, 2)
-	
+
 	var cdStatus string
 	var cdInfoDisplay string
-	
+
 	if m.config.Drives.CDDrive == "" {
 		cdStatus = "❌ No drive configured - go to Settings > Drives"
 	} else if m.cdInfo == nil {
@@ -1459,30 +1493,30 @@ func (m model) renderCDRipping() string {
 		}
 	} else {
 		cdStatus = "✅ CD detected"
-		
+
 		// Show CD information with constrained width
 		cdInfoStyle := lipgloss.NewStyle().
 			Foreground(lightBlue).
 			Bold(true).
-			Width(60).  // Constrain width to prevent overflow
+			Width(60). // Constrain width to prevent overflow
 			Margin(0, 2, 1, 2)
-		
+
 		var yearInfo string
 		if m.cdInfo.Year != "" {
 			yearInfo = fmt.Sprintf(" (%s)", m.cdInfo.Year)
 		}
-		
+
 		// Truncate long text to prevent layout issues
 		artist := m.cdInfo.Artist
 		if len(artist) > 30 {
 			artist = artist[:27] + "..."
 		}
-		
+
 		album := m.cdInfo.Album
 		if len(album) > 30 {
 			album = album[:27] + "..."
 		}
-		
+
 		// Show metadata source info
 		var metadataSource string
 		if m.cdInfo.Artist != "Unknown Artist" || m.cdInfo.Album != "Unknown Album" {
@@ -1490,7 +1524,7 @@ func (m model) renderCDRipping() string {
 		} else {
 			metadataSource = "Metadata: Basic disc info only"
 		}
-		
+
 		cdInfoDisplay = cdInfoStyle.Render(fmt.Sprintf(
 			"Artist: %s\nAlbum: %s%s\nTracks: %d\n%s",
 			artist,
@@ -1500,21 +1534,21 @@ func (m model) renderCDRipping() string {
 			metadataSource,
 		))
 	}
-	
+
 	cdStatusDisplay := cdStatusStyle.Render(cdStatus)
-	
+
 	// Ripping settings preview
 	settingsStyle := lipgloss.NewStyle().
 		Foreground(gray).
 		Margin(1, 2)
-	
+
 	settingsInfo := settingsStyle.Render(fmt.Sprintf(
 		"Format: %s • CDDB: %s • Output: %s",
 		m.config.CDRipping.OutputFormat,
 		m.config.CDRipping.CDDBMethod,
 		m.config.Paths.Music,
 	))
-	
+
 	// Action buttons (simulated)
 	actionStyle := lipgloss.NewStyle().
 		Foreground(accent).
@@ -1522,7 +1556,7 @@ func (m model) renderCDRipping() string {
 		Background(lightBlue).
 		Padding(0, 1).
 		Margin(1, 2)
-	
+
 	var actionText string
 	if m.config.Drives.CDDrive == "" {
 		actionText = "Configure drive first"
@@ -1531,11 +1565,11 @@ func (m model) renderCDRipping() string {
 	} else {
 		actionText = "▶ Press Enter to start ripping"
 	}
-	
+
 	action := actionStyle.Render(actionText)
-	
+
 	help := helpStyle.Render("Press 'r' to detect CD • Enter to start • Esc/q to go back")
-	
+
 	var content string
 	if cdInfoDisplay != "" {
 		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n\n%s\n\n%s",
@@ -1558,7 +1592,7 @@ func (m model) renderCDRipping() string {
 			help,
 		)
 	}
-	
+
 	return containerStyle.Render(content)
 }
 
@@ -1569,4 +1603,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
