@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -81,6 +82,8 @@ type cdDetectedMsg struct {
 
 type rippingProgressMsg ripper.ProgressInfo
 
+type spinnerTickMsg struct{}
+
 type Screen int
 
 const (
@@ -107,6 +110,7 @@ type model struct {
 	rippingStatus string
 	cdRipper      *ripper.CDRipper
 	cdInfo        *ripper.CDInfo
+	spinnerFrame  int
 }
 
 func initialModel() model {
@@ -140,6 +144,7 @@ func initialModel() model {
 		rippingStatus:   "",
 		cdRipper:        cdRipper,
 		cdInfo:          nil,
+		spinnerFrame:    0,
 	}
 }
 
@@ -178,8 +183,20 @@ func listenForProgressCmd(progressCh <-chan ripper.ProgressInfo) tea.Cmd {
 	})
 }
 
+func spinnerCmd() tea.Cmd {
+	return tea.Tick(time.Millisecond*200, func(time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinnerTickMsg:
+		if m.isRipping {
+			m.spinnerFrame++
+			return m, spinnerCmd()
+		}
+		return m, nil
 	case cdDetectedMsg:
 		if msg.err != nil {
 			m.rippingStatus = fmt.Sprintf("Error detecting CD: %v", msg.err)
@@ -1308,11 +1325,10 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// During ripping, only allow quit
 		switch msg.String() {
 		case "q", "esc":
-			// Stop ripping process
-			m.cdRipper.Stop()
+			fmt.Printf("DEBUG: User cancelled ripping\n")
 			m.isRipping = false
 			m.rippingProgress = 0
-			m.rippingStatus = "Ripping cancelled"
+			m.rippingStatus = ""
 			m.currentScreen = WelcomeScreen
 			return m, nil
 		}
@@ -1332,6 +1348,7 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			fmt.Printf("DEBUG: Starting simple rip\n")
 			m.isRipping = true
 			m.rippingStatus = "Ripping in progress..."
+			m.spinnerFrame = 0
 			// Just start ripping without progress tracking
 			go func() {
 				fmt.Printf("DEBUG: Starting abcde command\n")
@@ -1367,7 +1384,7 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					fmt.Printf("DEBUG: abcde completed successfully\n")
 				}
 			}()
-			return m, nil
+			return m, spinnerCmd()
 		} else {
 			fmt.Printf("DEBUG: Cannot start rip - missing drive or CD info\n")
 			m.rippingStatus = "Cannot start: No drive configured or CD not detected"
@@ -1385,27 +1402,26 @@ func (m model) renderCDRipping() string {
 	title := titleStyle.Render("💿 CD Ripping")
 	
 	if m.isRipping {
-		// Show ripping progress
+		// Show ripping progress with spinner
 		subtitle := subtitleStyle.Render("Ripping in progress...")
 		
-		// Progress bar (simple text-based for now)
-		progressStyle := lipgloss.NewStyle().
-			Foreground(green).
+		// Spinner animation
+		spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		currentSpinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+		
+		spinnerStyle := lipgloss.NewStyle().
+			Foreground(accent).
 			Bold(true).
 			Margin(1, 2)
 		
-		progressText := fmt.Sprintf("Progress: %d%%", m.rippingProgress)
-		progress := progressStyle.Render(progressText)
-		
-		statusDisplay := descriptionStyle.Render(m.rippingStatus)
+		spinnerDisplay := spinnerStyle.Render(fmt.Sprintf("%s %s", currentSpinner, m.rippingStatus))
 		
 		help := helpStyle.Render("Press 'q' or Esc to cancel ripping")
 		
-		content := fmt.Sprintf("%s\n%s\n\n%s\n%s\n\n%s",
+		content := fmt.Sprintf("%s\n%s\n\n%s\n\n%s",
 			title,
 			subtitle,
-			progress,
-			statusDisplay,
+			spinnerDisplay,
 			help,
 		)
 		
