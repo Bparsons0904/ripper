@@ -99,6 +99,7 @@ type Screen int
 const (
 	WelcomeScreen Screen = iota
 	CDRippingScreen
+	RippingSuccessScreen
 	SettingsMenuScreen
 	DrivesSettingsScreen
 	PathsSettingsScreen
@@ -121,7 +122,12 @@ type model struct {
 	cdRipper        *ripper.CDRipper
 	cdInfo          *ripper.CDInfo
 	spinnerFrame    int
-	abcdeCmd        *exec.Cmd // Track the running command
+	abcdeCmd        *exec.Cmd
+	
+	// Success screen data
+	lastRipSuccess  bool
+	lastRipError    error
+	lastRippedCD    *ripper.CDInfo // Track the running command
 }
 
 func initialModel() model {
@@ -240,11 +246,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case rippingCompleteMsg:
 		m.isRipping = false
 		m.abcdeCmd = nil
-		if msg.success {
-			m.rippingStatus = "✅ Ripping completed successfully!"
-		} else {
-			m.rippingStatus = fmt.Sprintf("❌ Ripping failed: %v", msg.error)
-		}
+		
+		// Store completion details for success screen
+		m.lastRipSuccess = msg.success
+		m.lastRipError = msg.error
+		m.lastRippedCD = m.cdInfo
+		
+		// Navigate to success screen
+		m.currentScreen = RippingSuccessScreen
+		m.selectedItem = 0
 		return m, nil
 	case metadataLookupMsg:
 		if msg.success {
@@ -286,6 +296,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateWelcome(msg)
 		case CDRippingScreen:
 			return m.updateCDRipping(msg)
+		case RippingSuccessScreen:
+			return m.updateRippingSuccess(msg)
 		case SettingsMenuScreen:
 			return m.updateSettingsMenu(msg)
 		case DrivesSettingsScreen:
@@ -814,6 +826,8 @@ func (m model) View() string {
 		return m.renderWelcome()
 	case CDRippingScreen:
 		return m.renderCDRipping()
+	case RippingSuccessScreen:
+		return m.renderRippingSuccess()
 	case SettingsMenuScreen:
 		return m.renderSettingsMenu()
 	case DrivesSettingsScreen:
@@ -1466,6 +1480,29 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateRippingSuccess(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc":
+		// Go back to main menu
+		m.currentScreen = WelcomeScreen
+		return m, nil
+	case "r":
+		// Start another rip - go to CD ripping screen and auto-detect
+		m.currentScreen = CDRippingScreen
+		m.selectedItem = 0
+		// Auto-start CD detection immediately
+		if m.config.Drives.CDDrive != "" {
+			m.rippingStatus = "🔄 Detecting CD..."
+			m.cdInfo = nil
+			return m, detectCDCmd(m.cdRipper)
+		} else {
+			m.rippingStatus = "No drive configured - go to Settings > Drives"
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
 func (m model) renderCDRipping() string {
 	title := titleStyle.Render("💿 CD Ripping")
 	
@@ -1584,6 +1621,99 @@ func (m model) renderCDRipping() string {
 		help,
 	)
 
+	return containerStyle.Render(content)
+}
+
+func (m model) renderRippingSuccess() string {
+	// Define colors
+	successGreen := lipgloss.Color("34")
+	errorRed := lipgloss.Color("196")
+	lightBlue := lipgloss.Color("39")
+	accent := lipgloss.Color("205")
+	gray := lipgloss.Color("241")
+	
+	// Styles
+	titleStyle := lipgloss.NewStyle().
+		Foreground(accent).
+		Bold(true).
+		Align(lipgloss.Center).
+		Margin(1, 0)
+	
+	subtitleStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Align(lipgloss.Center).
+		Margin(0, 0, 1, 0)
+	
+	statusStyle := lipgloss.NewStyle().
+		Bold(true).
+		Padding(1, 2).
+		Margin(1, 2).
+		Align(lipgloss.Center)
+	
+	detailStyle := lipgloss.NewStyle().
+		Foreground(lightBlue).
+		Margin(0, 2, 1, 2).
+		Padding(1, 2)
+	
+	actionStyle := lipgloss.NewStyle().
+		Foreground(accent).
+		Bold(true).
+		Background(lightBlue).
+		Padding(0, 1).
+		Margin(1, 2)
+	
+	helpStyle := lipgloss.NewStyle().
+		Foreground(gray).
+		Align(lipgloss.Center).
+		Margin(1, 0)
+	
+	var title, subtitle, status, details string
+	
+	if m.lastRipSuccess {
+		title = "✅ Ripping Completed Successfully!"
+		subtitle = "Your CD has been ripped and saved"
+		status = statusStyle.Foreground(successGreen).Render("SUCCESS")
+		
+		// Show completion details
+		if m.lastRippedCD != nil {
+			details = detailStyle.Render(fmt.Sprintf(
+				"Tracks: %d\nOutput: %s\nFormat: %s",
+				m.lastRippedCD.TrackCount,
+				m.config.Paths.Music,
+				m.config.CDRipping.OutputFormat,
+			))
+		}
+	} else {
+		title = "❌ Ripping Failed"
+		subtitle = "An error occurred during the ripping process"
+		status = statusStyle.Foreground(errorRed).Render("FAILED")
+		
+		// Show error details
+		errorMsg := "Unknown error"
+		if m.lastRipError != nil {
+			errorMsg = m.lastRipError.Error()
+			// Truncate long error messages
+			if len(errorMsg) > 100 {
+				errorMsg = errorMsg[:97] + "..."
+			}
+		}
+		details = detailStyle.Render(fmt.Sprintf("Error: %s", errorMsg))
+	}
+	
+	// Action buttons
+	actions := actionStyle.Render("'r' to rip another CD • 'q' to return to main menu")
+	
+	help := helpStyle.Render("'r' rip another • Esc/q main menu")
+	
+	content := fmt.Sprintf("%s\n%s\n\n%s\n\n%s\n\n%s\n\n%s",
+		titleStyle.Render(title),
+		subtitleStyle.Render(subtitle),
+		status,
+		details,
+		actions,
+		help,
+	)
+	
 	return containerStyle.Render(content)
 }
 
