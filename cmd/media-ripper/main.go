@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -157,9 +158,16 @@ func detectCDCmd(cdRipper *ripper.CDRipper) tea.Cmd {
 func startRippingCmd(cdRipper *ripper.CDRipper, cdInfo *ripper.CDInfo) tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
 		go func() {
-			cdRipper.RipCD(cdInfo)
+			fmt.Printf("DEBUG: RipCD goroutine started\n")
+			if err := cdRipper.RipCD(cdInfo); err != nil {
+				fmt.Printf("DEBUG: RipCD failed: %v\n", err)
+			}
 		}()
-		return nil
+		// Return a message to indicate ripping started
+		return rippingProgressMsg(ripper.ProgressInfo{
+			Status: "Ripping started...",
+			Progress: 0,
+		})
 	})
 }
 
@@ -175,9 +183,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cdDetectedMsg:
 		if msg.err != nil {
 			m.rippingStatus = fmt.Sprintf("Error detecting CD: %v", msg.err)
+			m.cdInfo = nil
 		} else {
 			m.cdInfo = msg.cdInfo
-			m.rippingStatus = "CD detected successfully"
+			m.rippingStatus = ""  // Clear status once CD is detected successfully
 		}
 		return m, nil
 	case rippingProgressMsg:
@@ -193,8 +202,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isRipping = false
 			return m, nil
 		}
-		// Continue listening for progress
-		return m, listenForProgressCmd(m.cdRipper.GetProgressChannel())
+		// Only continue listening for progress if we're actually ripping
+		if m.isRipping {
+			return m, listenForProgressCmd(m.cdRipper.GetProgressChannel())
+		}
+		return m, nil
 	case tea.KeyMsg:
 		switch m.currentScreen {
 		case WelcomeScreen:
@@ -1313,21 +1325,57 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentScreen = WelcomeScreen
 		return m, nil
 	case "enter", " ":
-		// Start ripping
+		// Simple rip start - no progress tracking for now
+		fmt.Printf("DEBUG: Enter pressed - Drive: '%s', CDInfo: %v\n", m.config.Drives.CDDrive, m.cdInfo != nil)
+		
 		if m.config.Drives.CDDrive != "" && m.cdInfo != nil {
+			fmt.Printf("DEBUG: Starting simple rip\n")
 			m.isRipping = true
-			m.rippingProgress = 0
-			m.rippingStatus = "Starting CD rip..."
-			// Start the ripping process and listen for progress
-			cmds := []tea.Cmd{
-				startRippingCmd(m.cdRipper, m.cdInfo),
-				listenForProgressCmd(m.cdRipper.GetProgressChannel()),
-			}
-			return m, tea.Batch(cmds...)
+			m.rippingStatus = "Ripping in progress..."
+			// Just start ripping without progress tracking
+			go func() {
+				fmt.Printf("DEBUG: Starting abcde command\n")
+				fmt.Printf("DEBUG: Output dir: %s\n", m.config.Paths.Music)
+				
+				// Create output directory if it doesn't exist
+				if err := os.MkdirAll(m.config.Paths.Music, 0755); err != nil {
+					fmt.Printf("DEBUG: Failed to create output dir: %v\n", err)
+					return
+				}
+				
+				// Run abcde with proper output directory
+				cmd := exec.Command("abcde", 
+					"-d", m.config.Drives.CDDrive,
+					"-o", m.config.CDRipping.OutputFormat,
+					"-a", "default",  // Use default actions (cddb,read,encode,tag,move,clean)
+				)
+				
+				// Set working directory to output location
+				cmd.Dir = m.config.Paths.Music
+				
+				// Set environment variables for abcde
+				cmd.Env = append(os.Environ(),
+					"OUTPUTDIR="+m.config.Paths.Music,
+					"OUTPUTFORMAT=${ARTISTFILE}/${ALBUMFILE}/${TRACKNUM}_${TRACKFILE}",
+				)
+				
+				fmt.Printf("DEBUG: Running: %s in %s\n", cmd.String(), cmd.Dir)
+				
+				if err := cmd.Run(); err != nil {
+					fmt.Printf("DEBUG: abcde failed: %v\n", err)
+				} else {
+					fmt.Printf("DEBUG: abcde completed successfully\n")
+				}
+			}()
+			return m, nil
+		} else {
+			fmt.Printf("DEBUG: Cannot start rip - missing drive or CD info\n")
+			m.rippingStatus = "Cannot start: No drive configured or CD not detected"
 		}
 	case "r":
 		// Refresh CD info
 		m.rippingStatus = "Detecting CD..."
+		m.cdInfo = nil // Clear previous CD info
 		return m, detectCDCmd(m.cdRipper)
 	}
 	return m, nil
@@ -1474,13 +1522,12 @@ func (m model) renderCDRipping() string {
 	
 	var content string
 	if cdInfoDisplay != "" {
-		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s",
+		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n\n%s\n\n%s",
 			title,
 			subtitle,
 			driveInfo,
 			cdStatusDisplay,
 			cdInfoDisplay,
-			settingsInfo,
 			action,
 			help,
 		)
@@ -1500,7 +1547,7 @@ func (m model) renderCDRipping() string {
 }
 
 func main() {
-	p := tea.NewProgram(initialModel())
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v", err)
 		os.Exit(1)
