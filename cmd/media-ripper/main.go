@@ -84,6 +84,16 @@ type rippingProgressMsg ripper.ProgressInfo
 
 type spinnerTickMsg struct{}
 
+type rippingCompleteMsg struct {
+	success bool
+	error   error
+}
+
+type metadataLookupMsg struct {
+	success bool
+	error   error
+}
+
 type Screen int
 
 const (
@@ -162,6 +172,13 @@ func detectCDCmd(cdRipper *ripper.CDRipper) tea.Cmd {
 	})
 }
 
+func metadataLookupCmd(cdRipper *ripper.CDRipper, cdInfo *ripper.CDInfo) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		err := cdRipper.LookupMetadata(cdInfo)
+		return metadataLookupMsg{success: err == nil, error: err}
+	})
+}
+
 func startRippingCmd(cdRipper *ripper.CDRipper, cdInfo *ripper.CDInfo) tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
 		go func() {
@@ -191,12 +208,49 @@ func spinnerCmd() tea.Cmd {
 	})
 }
 
+func rippingCmd(cmd *exec.Cmd, musicPath string) tea.Cmd {
+	return func() tea.Msg {
+		// Create output directory if it doesn't exist
+		if err := os.MkdirAll(musicPath, 0755); err != nil {
+			return rippingCompleteMsg{success: false, error: err}
+		}
+
+		// Clean up any previous abcde working directories to avoid version conflicts
+		cleanupCmd := exec.Command("sh", "-c", fmt.Sprintf("rm -rf '%s'/abcde.* 2>/dev/null || true", musicPath))
+		cleanupCmd.Run()
+
+		// Run abcde and capture result
+		_, err := cmd.CombinedOutput()
+		if err != nil {
+			return rippingCompleteMsg{success: false, error: err}
+		}
+		
+		return rippingCompleteMsg{success: true, error: nil}
+	}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinnerTickMsg:
 		if m.isRipping {
 			m.spinnerFrame++
 			return m, spinnerCmd()
+		}
+		return m, nil
+	case rippingCompleteMsg:
+		m.isRipping = false
+		m.abcdeCmd = nil
+		if msg.success {
+			m.rippingStatus = "✅ Ripping completed successfully!"
+		} else {
+			m.rippingStatus = fmt.Sprintf("❌ Ripping failed: %v", msg.error)
+		}
+		return m, nil
+	case metadataLookupMsg:
+		if msg.success {
+			m.rippingStatus = "✅ Metadata lookup completed!"
+		} else {
+			m.rippingStatus = fmt.Sprintf("❌ Metadata lookup failed: %v", msg.error)
 		}
 		return m, nil
 	case cdDetectedMsg:
@@ -691,7 +745,15 @@ func (m model) updateWelcome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.currentScreen = CDRippingScreen
 		m.selectedItem = 0
-		return m, nil
+		// Auto-start CD detection immediately
+		if m.config.Drives.CDDrive != "" {
+			m.rippingStatus = "🔄 Detecting CD..."
+			m.cdInfo = nil
+			return m, detectCDCmd(m.cdRipper)
+		} else {
+			m.rippingStatus = "No drive configured - go to Settings > Drives"
+			return m, nil
+		}
 	case "s":
 		m.currentScreen = SettingsMenuScreen
 		m.selectedItem = 0
@@ -1373,15 +1435,11 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "esc":
 		m.currentScreen = WelcomeScreen
 		return m, nil
-	case "enter", " ":
-		if m.config.Drives.CDDrive != "" && m.cdInfo != nil {
+	case "y":
+		// Confirm rip after CD detected
+		if m.cdInfo != nil {
 			m.isRipping = true
-			// Use album name in status if available
-			albumName := m.cdInfo.Album
-			if albumName == "Unknown Album" || albumName == "" {
-				albumName = "CD"
-			}
-			m.rippingStatus = fmt.Sprintf("Ripping %s", albumName)
+			m.rippingStatus = fmt.Sprintf("Ripping Audio CD")
 			m.spinnerFrame = 0
 			
 			// Create the command first so we can track it
@@ -1399,29 +1457,11 @@ func (m model) updateCDRipping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Store the command reference so we can kill it if needed
 			m.abcdeCmd = cmd
 			
-			// Start ripping in background
-			go func() {
-				// Create output directory if it doesn't exist
-				if err := os.MkdirAll(m.config.Paths.Music, 0755); err != nil {
-					return
-				}
-
-				// Clean up any previous abcde working directories to avoid version conflicts
-				cleanupCmd := exec.Command("sh", "-c", fmt.Sprintf("rm -rf '%s'/abcde.* 2>/dev/null || true", m.config.Paths.Music))
-				cleanupCmd.Run()
-
-				// Run abcde
-				cmd.CombinedOutput()
-			}()
-			return m, spinnerCmd()
+			// Start both ripping and spinner
+			return m, tea.Batch(rippingCmd(cmd, m.config.Paths.Music), spinnerCmd())
 		} else {
 			m.rippingStatus = "Cannot start: No drive configured or CD not detected"
 		}
-	case "r":
-		// Refresh CD info
-		m.rippingStatus = "Detecting CD..."
-		m.cdInfo = nil // Clear previous CD info
-		return m, detectCDCmd(m.cdRipper)
 	}
 	return m, nil
 }
@@ -1481,58 +1521,17 @@ func (m model) renderCDRipping() string {
 		Margin(0, 2, 1, 2)
 
 	var cdStatus string
-	var cdInfoDisplay string
 
 	if m.config.Drives.CDDrive == "" {
 		cdStatus = "❌ No drive configured - go to Settings > Drives"
 	} else if m.cdInfo == nil {
 		if m.rippingStatus == "" {
-			cdStatus = "🔍 Press 'r' to detect CD"
+			cdStatus = "🔍 Ready to detect CD"
 		} else {
-			cdStatus = m.rippingStatus
+			cdStatus = "🔄 " + m.rippingStatus // Add spinner emoji for detecting state
 		}
 	} else {
 		cdStatus = "✅ CD detected"
-
-		// Show CD information with constrained width
-		cdInfoStyle := lipgloss.NewStyle().
-			Foreground(lightBlue).
-			Bold(true).
-			Width(60). // Constrain width to prevent overflow
-			Margin(0, 2, 1, 2)
-
-		var yearInfo string
-		if m.cdInfo.Year != "" {
-			yearInfo = fmt.Sprintf(" (%s)", m.cdInfo.Year)
-		}
-
-		// Truncate long text to prevent layout issues
-		artist := m.cdInfo.Artist
-		if len(artist) > 30 {
-			artist = artist[:27] + "..."
-		}
-
-		album := m.cdInfo.Album
-		if len(album) > 30 {
-			album = album[:27] + "..."
-		}
-
-		// Show metadata source info
-		var metadataSource string
-		if m.cdInfo.Artist != "Unknown Artist" || m.cdInfo.Album != "Unknown Album" {
-			metadataSource = fmt.Sprintf("Metadata: %s", m.config.CDRipping.CDDBMethod)
-		} else {
-			metadataSource = "Metadata: Basic disc info only"
-		}
-
-		cdInfoDisplay = cdInfoStyle.Render(fmt.Sprintf(
-			"Artist: %s\nAlbum: %s%s\nTracks: %d\n%s",
-			artist,
-			album,
-			yearInfo,
-			m.cdInfo.TrackCount,
-			metadataSource,
-		))
 	}
 
 	cdStatusDisplay := cdStatusStyle.Render(cdStatus)
@@ -1561,37 +1560,29 @@ func (m model) renderCDRipping() string {
 	if m.config.Drives.CDDrive == "" {
 		actionText = "Configure drive first"
 	} else if m.cdInfo == nil {
-		actionText = "Detect CD first (press 'r')"
+		actionText = "🔄 Detecting CD..."
 	} else {
-		actionText = "▶ Press Enter to start ripping"
+		actionText = "✅ CD detected • Press 'y' to start ripping"
 	}
 
 	action := actionStyle.Render(actionText)
 
-	help := helpStyle.Render("Press 'r' to detect CD • Enter to start • Esc/q to go back")
-
-	var content string
-	if cdInfoDisplay != "" {
-		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n\n%s\n\n%s",
-			title,
-			subtitle,
-			driveInfo,
-			cdStatusDisplay,
-			cdInfoDisplay,
-			action,
-			help,
-		)
+	var help string
+	if m.cdInfo != nil {
+		help = helpStyle.Render("'y' to start ripping • Esc/q to go back")
 	} else {
-		content = fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n\n%s\n\n%s",
-			title,
-			subtitle,
-			driveInfo,
-			cdStatusDisplay,
-			settingsInfo,
-			action,
-			help,
-		)
+		help = helpStyle.Render("Detecting CD... • Esc/q to go back")
 	}
+
+	content := fmt.Sprintf("%s\n%s\n\n%s\n%s\n%s\n\n%s\n\n%s",
+		title,
+		subtitle,
+		driveInfo,
+		cdStatusDisplay,
+		settingsInfo,
+		action,
+		help,
+	)
 
 	return containerStyle.Render(content)
 }

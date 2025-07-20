@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Bparsons0904/ripper/internal/config"
 )
@@ -86,10 +87,8 @@ func (r *CDRipper) DetectCD() (*CDInfo, error) {
 		// Try to find cd-discid in PATH
 		if path, err := exec.LookPath("cd-discid"); err == nil {
 			r.config.Tools.CDDiscidPath = path
-			fmt.Printf("DEBUG: Found cd-discid at: %s\n", path)
 		} else {
 			// Fallback: create a mock CD for testing
-			fmt.Printf("DEBUG: cd-discid not found in PATH, creating mock CD\n")
 			return r.createMockCD(), nil
 		}
 	}
@@ -98,7 +97,7 @@ func (r *CDRipper) DetectCD() (*CDInfo, error) {
 
 	// Use cd-discid to get basic CD information
 	cmd := exec.Command(r.config.Tools.CDDiscidPath, r.config.Drives.CDDrive)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Provide more specific error information
 		if strings.Contains(err.Error(), "permission denied") {
@@ -107,12 +106,14 @@ func (r *CDRipper) DetectCD() (*CDInfo, error) {
 		if strings.Contains(err.Error(), "no such file") {
 			return nil, fmt.Errorf("drive %s not found - check if drive is connected", r.config.Drives.CDDrive)
 		}
+		if strings.Contains(string(output), "no disc") || strings.Contains(string(output), "No medium found") {
+			return nil, fmt.Errorf("no CD found in drive %s", r.config.Drives.CDDrive)
+		}
 		return nil, fmt.Errorf("failed to detect CD in %s: %w", r.config.Drives.CDDrive, err)
 	}
 
-	// Debug: log the raw output
+	// Parse the output
 	outputStr := strings.TrimSpace(string(output))
-	fmt.Printf("DEBUG: cd-discid output: '%s'\n", outputStr)
 
 	// Parse cd-discid output
 	// Format: discid numtracks offset1 offset2 ... offsetN length
@@ -135,42 +136,137 @@ func (r *CDRipper) DetectCD() (*CDInfo, error) {
 		}
 	}
 
-	fmt.Printf("DEBUG: Parsed disc info - ID: %s, Tracks: %d, Offsets: %v\n", discID, trackCount, offsets)
 
 	cdInfo := &CDInfo{
 		DiscID:     discID,
 		CDDBDiscID: discID, // cd-discid already provides CDDB format
 		TrackCount: trackCount,
 		Offsets:    offsets,
-		Artist:     "Unknown Artist",
-		Album:      "Unknown Album",
+		Artist:     "CD", // Keep it simple
+		Album:      "Audio CD",
 		Tracks:     make([]TrackInfo, trackCount),
 	}
 
-	// Initialize track information
+	// Initialize basic track information
 	for i := 0; i < trackCount; i++ {
 		cdInfo.Tracks[i] = TrackInfo{
 			Number: i + 1,
 			Title:  fmt.Sprintf("Track %02d", i+1),
-			Artist: cdInfo.Artist,
+			Artist: "CD",
 		}
 	}
 
-	// Try to get additional metadata from CDDB if configured
-	if r.config.CDRipping.CDDBMethod != "none" {
-		fmt.Printf("DEBUG: Attempting metadata lookup via %s\n", r.config.CDRipping.CDDBMethod)
-		
-		if err := r.lookupCDDB(cdInfo); err != nil {
-			// Log warning but don't fail - basic disc info is still useful
-			fmt.Printf("DEBUG: %s lookup failed: %v\n", r.config.CDRipping.CDDBMethod, err)
-		} else {
-			fmt.Printf("DEBUG: Metadata lookup successful - Artist: %s, Album: %s\n", cdInfo.Artist, cdInfo.Album)
-		}
-	} else {
-		fmt.Printf("DEBUG: CDDB method is 'none', skipping metadata lookup\n")
-	}
 
 	return cdInfo, nil
+}
+
+// LookupMetadata attempts to lookup metadata for an already detected CD using abcde
+func (r *CDRipper) LookupMetadata(cdInfo *CDInfo) error {
+	if r.config.CDRipping.CDDBMethod == "none" {
+		return fmt.Errorf("CDDB method is set to 'none' - no metadata lookup available")
+	}
+	
+	fmt.Printf("DEBUG: Starting metadata lookup using abcde CDDB query\n")
+	
+	// Use abcde to do the metadata lookup - it's much more reliable than our custom implementation
+	if err := r.lookupWithAbcde(cdInfo); err != nil {
+		fmt.Printf("DEBUG: abcde metadata lookup failed: %v\n", err)
+		return err
+	}
+	
+	fmt.Printf("DEBUG: Metadata lookup successful - Artist: %s, Album: %s\n", cdInfo.Artist, cdInfo.Album)
+	return nil
+}
+
+// lookupWithAbcde uses abcde's CDDB lookup functionality to get metadata
+func (r *CDRipper) lookupWithAbcde(cdInfo *CDInfo) error {
+	// Find abcde path
+	abcdePath := r.config.Tools.AbcdePath
+	if abcdePath == "" {
+		if path, err := exec.LookPath("abcde"); err == nil {
+			abcdePath = path
+		} else {
+			return fmt.Errorf("abcde not found in PATH")
+		}
+	}
+	
+	// Create a temporary directory for abcde to work in
+	tempDir := fmt.Sprintf("/tmp/metadata-lookup-%s", cdInfo.DiscID)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir) // Clean up
+	
+	// Run abcde with verbose output to capture CDDB information directly
+	cmd := exec.Command(abcdePath,
+		"-d", r.config.Drives.CDDrive,
+		"-a", "cddb",     // Only do CDDB lookup, don't rip
+		"-o", "flac",     // Dummy format
+		"-v",             // Verbose output to see CDDB results
+	)
+	cmd.Dir = tempDir
+	
+	// Set a timeout for the lookup
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+	
+	fmt.Printf("DEBUG: abcde output: %s\n", outputStr)
+	
+	if err != nil {
+		return fmt.Errorf("abcde CDDB lookup failed: %w", err)
+	}
+	
+	// Try to parse artist/album directly from abcde's verbose output
+	return r.parseAbcdeOutput(outputStr, cdInfo)
+}
+
+// parseAbcdeOutput attempts to extract metadata from abcde's verbose output
+func (r *CDRipper) parseAbcdeOutput(output string, cdInfo *CDInfo) error {
+	lines := strings.Split(output, "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// Look for common patterns in abcde output
+		if strings.Contains(line, "DTITLE=") {
+			// CDDB format: "DTITLE=Artist / Album"
+			if parts := strings.SplitN(line, "DTITLE=", 2); len(parts) == 2 {
+				title := strings.TrimSpace(parts[1])
+				if strings.Contains(title, " / ") {
+					artistAlbum := strings.SplitN(title, " / ", 2)
+					cdInfo.Artist = strings.TrimSpace(artistAlbum[0])
+					cdInfo.Album = strings.TrimSpace(artistAlbum[1])
+					return nil
+				}
+			}
+		}
+		
+		// Alternative patterns abcde might use
+		if strings.Contains(line, "Artist:") && strings.Contains(line, "Album:") {
+			// Try to extract from "Artist: X Album: Y" format
+			parts := strings.Fields(line)
+			var artist, album string
+			for i, part := range parts {
+				if part == "Artist:" && i+1 < len(parts) {
+					artist = parts[i+1]
+				}
+				if part == "Album:" && i+1 < len(parts) {
+					album = parts[i+1]
+				}
+			}
+			if artist != "" && album != "" {
+				cdInfo.Artist = artist
+				cdInfo.Album = album
+				return nil
+			}
+		}
+	}
+	
+	return fmt.Errorf("could not parse artist/album from abcde output")
 }
 
 // lookupCDDB attempts to lookup CD information from CDDB/MusicBrainz
@@ -190,12 +286,13 @@ func (r *CDRipper) lookupCDDB(cdInfo *CDInfo) error {
 
 // lookupMusicBrainz queries the MusicBrainz API using CDDB disc ID
 func (r *CDRipper) lookupMusicBrainz(cdInfo *CDInfo) error {
-	// For now, try a simple MusicBrainz search by release
-	// This is a fallback approach since proper disc ID calculation is complex
+	// Try using cd-info which can provide CD-TEXT information
+	if cdInfoCmd, err := exec.LookPath("cd-info"); err == nil {
+		return r.lookupWithCdInfo(cdInfoCmd, cdInfo)
+	}
 	
-	// Try to use abcde's built-in CDDB/MusicBrainz support instead
-	// by letting abcde handle the metadata lookup during ripping
-	return fmt.Errorf("MusicBrainz lookup via API not fully implemented - will use abcde's built-in support during ripping")
+	// Try a simple approach with abcde itself to get metadata
+	return r.tryAbcdeMetadata(cdInfo)
 }
 
 // calculateMusicBrainzDiscID creates a MusicBrainz disc ID from track offsets
@@ -252,6 +349,53 @@ func (r *CDRipper) lookupWithCdInfo(cdInfoPath string, cdInfo *CDInfo) error {
 				if len(parts) == 2 {
 					cdInfo.Artist = strings.TrimSpace(parts[1])
 				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// tryAbcdeMetadata attempts to get metadata using abcde's lookup capabilities
+func (r *CDRipper) tryAbcdeMetadata(cdInfo *CDInfo) error {
+	// Let's try a simpler approach - just use cddb_tool if available
+	if cddbTool, err := exec.LookPath("cddb_tool"); err == nil {
+		return r.tryWithCddbTool(cddbTool, cdInfo)
+	}
+	
+	// For now, just return without error to avoid blocking the detection
+	// The metadata will be handled by abcde during the actual ripping process
+	return nil
+}
+
+// tryWithCddbTool uses cddb_tool for metadata lookup
+func (r *CDRipper) tryWithCddbTool(cddbToolPath string, cdInfo *CDInfo) error {
+	// Use cddb_tool with the disc ID to query CDDB
+	cmd := exec.Command(cddbToolPath, "query", cdInfo.DiscID)
+	
+	// Set a short timeout for the lookup
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("cddb_tool lookup failed: %w", err)
+	}
+	
+	// Parse cddb_tool output for basic information
+	outputStr := string(output)
+	lines := strings.Split(outputStr, "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "/") {
+			// CDDB format is often "Artist / Album"
+			parts := strings.Split(line, "/")
+			if len(parts) >= 2 {
+				cdInfo.Artist = strings.TrimSpace(parts[0])
+				cdInfo.Album = strings.TrimSpace(parts[1])
+				break
 			}
 		}
 	}
@@ -474,29 +618,19 @@ func (r *CDRipper) createMockCD() *CDInfo {
 		CDDBDiscID: "a10c6b0d",
 		TrackCount: 10,
 		Offsets:    []int{150, 12345, 23456, 34567, 45678, 56789, 67890, 78901, 89012, 90123, 180000},
-		Artist:     "Pink Floyd",
-		Album:      "The Dark Side of the Moon",
-		Year:       "1973",
-		Genre:      "Progressive Rock",
+		Artist:     "CD",
+		Album:      "Audio CD", 
+		Year:       "",
+		Genre:      "",
 		Tracks:     make([]TrackInfo, 10),
 	}
 
-	// Initialize mock track information with realistic titles
-	trackTitles := []string{
-		"Speak to Me", "Breathe", "On the Run", "Time", "The Great Gig in the Sky",
-		"Money", "Us and Them", "Any Colour You Like", "Brain Damage", "Eclipse",
-	}
-	
+	// Initialize basic track information
 	for i := 0; i < 10; i++ {
-		title := fmt.Sprintf("Track %02d", i+1)
-		if i < len(trackTitles) {
-			title = trackTitles[i]
-		}
-		
 		cdInfo.Tracks[i] = TrackInfo{
 			Number:   i + 1,
-			Title:    title,
-			Artist:   cdInfo.Artist,
+			Title:    fmt.Sprintf("Track %02d", i+1),
+			Artist:   "CD",
 			Duration: "3:45",
 		}
 	}
